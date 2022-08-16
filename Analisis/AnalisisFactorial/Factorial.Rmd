@@ -1,0 +1,231 @@
+---
+title: "Analisis Factorial"
+output: html_notebook
+---
+
+```{r}
+library(Hmisc)
+library(tidyverse)
+library(corrplot)
+library(GGally)
+library(boot)
+```
+
+
+```{r}
+spam <- rbind(
+ read_csv('../../Datos/DatosReales/EXCEL (respuestas) - Respuestas de formulario 1.csv') %>% 
+  select(starts_with('Por favor, indicá')),
+ read_csv('../../Datos/DatosReales/EXCEL PRIMER FORMULARIO - 01 Percepciones del uso, FOMO y tiempo de uso real de Instagram en jóvenes argentinos.csv') %>%
+   select(starts_with('Por favor, indicá'))
+) %>%
+  drop_na(everything())
+
+spam <- spam %>% mutate(across(.fns = ~ str_extract(.x, '\\d'))) %>% 
+  mutate(across(.fns = as.integer)) %>%
+  rename(
+    "A1" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Mandarme mensajes con amigos, familiares, conocidos]",
+    "P1" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Mirar las publicaciones/historias de otras personas]",
+    "P2" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Navegar en el inicio de Instagram]",
+    "A2" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Publicar fotos/videos en el perfil o historias]",
+    "A3" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Darle \"like\" a publicaciones o historias de otras personas]",
+    "A4" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Comentar publicaciones o historias]",
+    "P3" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Mirar el feed de noticias y/o buscar información]" 
+  )
+```
+
+# Visualizacion multivariada
+
+El objetivo de esta visualizacion es ver, al mismo tiempo, la distribucion de cada variable y la relacion bivariada para examinar patrones no monotonicos.
+
+```{r}
+ggpairs(spam,
+upper = list(continuous = "density", combo = "box_no_facet"),
+lower = list(continuous = wrap("points", position=position_jitter(height= .3, width=.3)), combo = "dot_no_facet"))
+```
+
+# Correlaciones
+
+## Spearman
+
+```{r}
+cor(spam, method = 'spearman') %>% corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+```
+
+## Kendall
+
+```{r}
+cor(spam, method = 'kendall') %>% corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+```
+
+## Gamma
+
+Hacer la correlacion gamma no es tan sencillo como con las otras. Para hacerla vamos a usar la funcion `rcorr.cens` del paquete `Hmisc`. El problema con esta funcion es que espera dos vectores de numeros por lo que si le damos el dataframe como argumento (como haciamos en los otros casos) nos va a dar un error. Lo que tenemos que hacer es buscar la manera de decirle a R que calcule la correlacion para todas las combinaciones de las variables. Para eso usamos la funcion `expand.grid`, aplicamos la funcion para calcular la correlacion gamma de manera row-wise, extraemos la columna resultante que contiene la correlacion y convertimos el resultando en una matrix cuadrada segun la cantidad de columnas es decir una matriz 7x7.
+Por ultimo le agregamos los nombres de las columnas y las filas.
+
+```{r}
+gamma_matrix <- expand.grid(colnames(spam), colnames(spam)) %>% tibble() %>%
+  rowwise() %>%
+  mutate(
+    correlacion = rcorr.cens(spam[[Var1]], spam [[Var2]], outx = TRUE)['Dxy']
+  ) %>% 
+  pull(correlacion) %>%
+  matrix(nrow = ncol(spam), ncol = ncol(spam))
+colnames(gamma_matrix) <- colnames(spam)
+rownames(gamma_matrix) <- colnames(spam)
+```
+
+Ahora si podemos proceder a graficar el resultado.
+
+```{r}
+gamma_matrix %>% 
+  corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+ggsave('./')
+```
+
+# Correlaciones con intervalos
+
+Para comparar los niveles de correlacion de cada una de las variables con los distintos metodos vamos a calcular el nivel de la correlacion y a su vez vamos a calcular los intervalos de confianza del 95% sobre el valor del estadistico correspondiente usando un Bootstrap no parametrico de 5000 muestras.
+
+Para eso primero creamos una funcion que calcula los tres tipos de correlacion a partir de dos vectores numericos.
+
+```{r}
+all_corr <- function(vector_x, vector_y){
+  kendall_cor <- cor(vector_x, vector_y, method = 'kendall')
+  spearman_cor <- cor(vector_x, vector_y, method = 'spearman')
+  gamma_cor <- unname(rcorr.cens(vector_x, vector_y, outx = TRUE)['Dxy']) 
+  c(kendall_cor, spearman_cor, gamma_cor)
+}
+```
+
+Ahora generamos un datafame con todas las combinaciones de dos variables dadas por nuestras 7 variables de interes.
+
+```{r}
+all_comb <- expand.grid(
+  colnames(spam), colnames(spam)
+)
+```
+
+Sobre esa base vamos a aplicarle a cada fila nuestra funcion y convertir los resultados en un dataframe con 3 columnas (una para cada tipo de correlacion) y la misma cantidad de filas que el objeto `all_comb`
+
+```{r}
+all_corr_df <- all_comb %>%
+  pmap(
+    ~ all_corr(spam[[.x]], spam[[.y]])
+  ) %>% unlist() %>% matrix(nrow = 49, ncol = 3, byrow = TRUE) %>%
+  as.data.frame()
+colnames(all_corr_df) <- c('Kendall', 'Spearman', 'Gamma')
+```
+
+Combinamos ambos dataframes en uno solo uniendo las columnas y eliminamos los valores de 1 donde no hay variabilidad
+
+```{r}
+all_comb_corr_df <- cbind(
+  all_comb, 
+  all_corr_df
+) %>%
+  filter(Kendall < 1 & Spearman < 1 & Gamma < 1)
+```
+
+Calculo los indices de las filas que estan repetidas solo que tienen otro orden. 
+
+```{r}
+ind_dup <- str_split(paste(all_comb_corr_df$Var1, all_comb_corr_df$Var2), ' ') %>% 
+  lapply(
+    str_sort
+  ) %>% unlist() %>% 
+  matrix(ncol = 2, byrow = TRUE) %>% 
+  as.data.frame() %>%
+  duplicated()
+```
+
+Utilizo los indices calculados anteriormente para filtrar el dataframe 
+
+```{r}
+clean_comb_corr <- all_comb_corr_df[ind_dup, ]
+```
+
+
+Para comparar entre los distintos metodos de correlacion vamos a modificar el dataframe `clean_comb_corr` para contener a los pares de variables en una sola columna y las correlaciones vamos a colapsarlas en una sola columna cambiando el dataframe a formato long. Una vez realizadas esas transformaciones podemos graficar poniendo en el eje x el nivel de las distintas correlaciones y en el eje y los pares de variables empleados para calcular la correlacion. 
+
+```{r}
+clean_comb_corr %>%
+  unite('Var_comb', Var1:Var2, sep = '-') %>%
+  pivot_longer(Kendall:Gamma, names_to = 'tipo_cor', values_to = 'corr_val') %>%
+  ggplot(
+  aes(y = Var_comb, x = corr_val, color = tipo_cor)
+) +
+  geom_point()
+```
+
+
+
+Con el dataframe ya filtrado vamos a calcular los intervalos para la correlacion gamma utilizando bootstrap. Para esto vamos a usar el paquete `boot` y vamos a generar una nueva funcion llamada `gamma_cor`.
+
+```{r}
+gamma_cor <- function(data, indices, variable1, variable2){
+  boot_data <- data[indices,]
+  vector_x <- boot_data[[variable1]]
+  vector_y <- boot_data[[variable2]]
+  unname(rcorr.cens(vector_x, vector_y, outx = TRUE)['Dxy'])
+}
+```
+
+Una vez que tenemos la funcion iteramos por cada par de variables del dataframe para usar la funcion de boot en cada caso y obtenemos como resultado una lista con 21 elementos correspondientes a los resultados de cada 
+
+```{r}
+boot_results <- clean_comb_corr %>%
+  pmap(
+    ~ boot(
+        data = spam,
+        statistic = gamma_cor,
+        R = 5000,
+        variable1 = .x,
+        variable2 = .y,
+        parallel = 'multicore',
+        ncpus = 4
+      )
+  ) 
+```
+
+Con los resultados ya calculados podemos construir intervalos de confianza iterando sobre la lista de resultados y aplicando la funcion `boot.ci` en cada iteracion, extrayendo de esta los valores que nos interesan que son los limites del intervalo. 
+
+```{r}
+boot_cis <- lapply(
+  boot_results,
+  function(x) boot.ci(x, type = 'bca')[['bca']][c(4,5)]
+)
+```
+
+Con esto armamos un dataframe que contenga dos columnas, una para el limite inferior y otra para el limite superior del intervalo. 
+
+```{r}
+cis_df <- boot_cis %>% unlist() %>% matrix(ncol = 2, byrow = TRUE) %>%
+  as_tibble() %>% rename(low = V1, high = V2) 
+```
+
+Unimos el dataframe creado recien con el dataframe que contiene las combinaciones de las variables eliminando los valores de las correlaciones de Kendall y Spearman que no nos interesan siendo que los intervalos corresponden unicamente a la correlacion Gamma.
+
+```{r}
+cor_df_combinado <- cbind(
+  clean_comb_corr,
+  cis_df
+) %>% select(!c(Kendall,Spearman))
+```
+
+Vuelvo a replicar un grafico como el anterior pero esta vez usando unicamente los valores de las correlaciones de Gamma y los intervalos calculados anteriormente. 
+
+```{r}
+cor_df_combinado %>%
+  unite('Var_comb', Var1:Var2, sep = '-') %>%
+  ggplot(
+  aes(y = Var_comb, x = Gamma)
+) +
+  geom_pointrange(
+    aes(xmax = high, xmin = low)
+  ) +
+  geom_vline(xintercept = 0, linetype = 'dashed') + 
+  scale_x_continuous(limits = c(0,1))
+```
+
+

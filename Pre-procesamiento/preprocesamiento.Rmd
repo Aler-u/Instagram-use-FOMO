@@ -1,0 +1,232 @@
+---
+title: "Pre-procesamiento"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+```
+
+
+
+```{r}
+dataset1 <- read_csv('../Datos/DatosReales/EXCEL PRIMER FORMULARIO - 01 Percepciones del uso, FOMO y tiempo de uso real de Instagram en jóvenes argentinos.csv')
+dataset2 <- read_csv('../Datos/DatosReales/EXCEL (respuestas) - Respuestas de formulario 1.csv')
+```
+
+# Limpieza Dataset 1
+
+El `dataset1` tiene varios errores en la carga de datos. Por eso cuenta con mas columnas que el `dataset2` en una primera instancia. 
+
+## Renaming de columnas
+
+Hay muchos nombres duplicados asi que vamos a estandarizarlo. 
+
+```{r}
+dataset1_clean <- dataset1 %>%
+  rename(
+    'Error_pub' = 'Error...11', #bool que marca un error en el reporte de la cantidad de publicaciones
+    'Correccion_pub' = 'Corrección...12', #string que marca una coreccion en el reporte de la cantidad de publicaciones
+    'Error_followers' = 'Error...15', #bool que marca un error en el reporte de la cantidad de seguidores
+    'Correccion_followers' = 'Corrección...16', #string que marca una correccion en el reporte de la cantidad de seguidores
+    'Error_following' = 'Error...19', #bool que marca un error en el reporte de la cantidad de personas que siguen con su cuenta
+    'Correccion_following' = 'Corrección...20', #string que marca una correccion en el reporte de la cantidad de personas que siguen con su cuenta
+    'Error_general' = 'Error...50' #bool que marca un error en algun punto para ese sujeto
+  )
+```
+
+
+## Eliminacion de columnas
+
+Las columnas relativas al error de cada sujeto pueden ser significativas en el contexto del dataset 1 pero no lo son en el contexto de unir ambos datasets. Para esto vamos a eliminar todas las columnas que empiezen o terminen con la palabra _'Error'_ o que empiecen con la palabra _'Correccion'_.
+
+```{r}
+dataset1_clean <- dataset1_clean %>%
+  select(!starts_with('Error')) %>% select(!starts_with('Correccion')) %>% select(!ends_with('Error'))
+```
+
+Tambien tengo que eliminar aquellas columnas que corresponden a los campos que pueden contener errores en el llenado de datos. En principio esto implicaria las 3 columnas correspondientes a los datos relativos a las cuentas de Instagram. 
+
+```{r}
+dataset1_clean <- dataset1_clean %>% 
+  select(
+    !c(`Hasta la fecha, ¿cuántas publicaciones tenés en tu cuenta personal?`,
+       `¿Cuántos seguidores tenés?`,
+       `¿A cuántas cuentas seguís?`)
+  )
+```
+
+De las columnas que sobraron hay que eliminar la palabra _'Duplicado'_ del nombre de la columna y eliminamos el _whitespace_ al principio y al final de los nombres de las columnas. 
+
+```{r}
+colnames(dataset1_clean) <- str_replace(colnames(dataset1_clean), 'Duplicado', '') %>% str_trim()
+```
+
+
+# Union de los dataframes
+
+## Comparacion de columnas
+
+Primero vamos a intentar unir los dataframes, para eso tenemos que chequear que los nombres y la cantidad de columnas sean las mismas.
+
+```{r}
+ncol(dataset1_clean) == ncol(dataset2)
+```
+
+La cantidad de columnas es la misma.
+
+Hay que comparar que no haya columnas que no estan en el `dataset2` pero estan en el `dataset1`. 
+
+```{r}
+#columnas_extra <- 
+colnames(dataset1_clean)[!colnames(dataset1_clean) %in% colnames(dataset2)]
+```
+Supuestamente no hay diferencia en la cantidad de columnas pero aca vemos muchas columnas que no estan en un dataset y si en el otro. Eso nos estaria hablando de incompatibilidades en el nombre mas que de columnas que sobran o faltan.
+
+Para comprobarlo necesitamos revisar los nombres de las columnas del `dataset2` que no estan en el 1
+
+```{r}
+colnames(dataset2)[!colnames(dataset2) %in% colnames(dataset1_clean)]
+```
+
+Por ejemplo, la columna `Actualmente, ¿tenés cuenta en Instagram?` en realidad si esta presente en el `dataset1` solo que con un nombre ligeramente distinto (`Actualmente, ¿tenés una cuenta en Instagram?`).  
+De la misma manera la columna _"Datos Screenshots"_ refleja lo mismo que la columna _"Promedio Diario"_.  
+Asi tambien, la columna _"Por último, sería de mucha utilidad que pudieras dejarnos tu usuario de Instagram. Esto es completamente OPCIONAL. Recordá que los datos obtenidos tienen carácter de confidencialidad, respaldados por esta investigación solo con fines académicos. Ningún dato personal de tu identidad será compartido ni publicado. Gracias por tu participación!"_ representa lo mismo que la columna _"Por último, sería de mucha utilidad para el estudio que pudieras dejarnos tu usuario de Instagram. Este paso es completamente OPCIONAL. Recordá que los datos obtenidos tienen carácter de confidencialidad, respaldados por esta investigación sólo para fines académicos. Ningún dato personal de tu identidad será compartido o difundido. Muchísimas gracias por tu participación!"_.  
+Finalmente la columna _"Si no pudiste adjuntar el screenshot, por favor escribí tu Promedio Diario de uso. Ejemplo: 01:10"_ representa lo mismo que la columna _"Si no pudiste adjuntar el screenshot, por favor escribí el tu Promedio Diario de uso. Ejemplo: 1 hs 30 min"_.
+
+En cambio la columna _"A continuación, encontrarás afirmaciones sobre algunas experiencias del día a día. Usando la escala de 1-5, por favor indica en qué medida se ajustan estas afirmaciones a vos, dada tu experiencia en general. Por favor responde aquello que realmente refleje tu situación y no lo que pienses que debería ser. Por favor, considerá cada pregunta por separado."_ en realidad no esta presente en el `dataset2`. Lo mismo ocurre con la columna _"Ahora te solicitamos que ingreses en tu perfil PERSONAL de Instagram (no puede ser una cuenta utilizada para fines laborales, como por ejemplo un emprendimiento, u otros fines). Una vez que ingreses, por favor seguí los siguientes pasos:"_. Estas columnas simplemente requerian la aceptacion del sujeto indicado en la string _'De acuerdo'_ que contienen como valor esas columnas. En el procedimiento del `dataset2` esto fue re-organizado de manera que no apareciera como una columna y un campo que los sujetos fueran a completar. 
+
+Las dos columnas que realmente sobran podemos eliminarlas del `dataset1_clean`. 
+
+```{r}
+dataset1_clean <- dataset1_clean %>%
+  select(
+    !c(
+      "A continuación, encontrarás afirmaciones sobre algunas experiencias del día a día. Usando la escala de 1-5, por favor indica en qué medida se ajustan estas afirmaciones a vos, dada tu experiencia en general. Por favor responde aquello que realmente refleje tu situación y no lo que pienses que debería ser. Por favor, considerá cada pregunta por separado.",
+      "Ahora te solicitamos que ingreses en tu perfil PERSONAL de Instagram (no puede ser una cuenta utilizada para fines laborales, como por ejemplo un emprendimiento, u otros fines). Una vez que ingreses, por favor seguí los siguientes pasos:"
+    )
+  )
+```
+
+Asi tambien eliminamos las columnas de `Error` y `Tipo de Error` del `dataset2`.
+
+```{r}
+dataset2_clean <- dataset2 %>% 
+  select(!contains('Error'))
+```
+
+Con el resto de las columnas nos queda la tarea de renombrarlas. Vamos a usar como base el `dataset2` por ser el mas nuevo y el mas limpio de ambos con lo cual las columnas del `dataset1` se van a renombrar a su homologo del `dataset2`. 
+Armamos entonces un vector nombrado que contenga los homologos de los nombres entre columnas de los dataframes para poder cambiarles el nombre.
+
+```{r}
+dataset1_clean <- dataset1_clean %>%
+  rename(
+  "Actualmente, ¿tenés cuenta en Instagram?" = "Actualmente, ¿tenés una cuenta en Instagram?",
+  "Promedio Diario" = "Datos Screenshots",
+  "Por último, sería de mucha utilidad que pudieras dejarnos tu usuario de Instagram. Esto es completamente OPCIONAL. Recordá que los datos obtenidos tienen carácter de confidencialidad, respaldados por esta investigación solo con fines académicos. Ningún dato personal de tu identidad será compartido ni publicado. Gracias por tu participación!" = "Por último, sería de mucha utilidad para el estudio que pudieras dejarnos tu usuario de Instagram. Este paso es completamente OPCIONAL. Recordá que los datos obtenidos tienen carácter de confidencialidad, respaldados por esta investigación sólo para fines académicos. Ningún dato personal de tu identidad será compartido o difundido. Muchísimas gracias por tu participación!",
+  "Si no pudiste adjuntar el screenshot, por favor escribí tu Promedio Diario de uso. Ejemplo: 01:10" = "Si no pudiste adjuntar el screenshot, por favor escribí el tu Promedio Diario de uso. Ejemplo: 1 hs 30 min"
+  )
+```
+
+## Limpieza de FOMO
+
+Antes de unir los datasets hay que dar cuenta de una diferencia en como estan reportados los valores de la escala de Fear of Missing Out (FOMO) utilizada. En el `dataset1` esta el numero junto con la palabra asociada que representa. Por ejemplo _'3 = Moderadamente'_. En el `dataset2` esta unicamente la string _'Moderadamente'_. 
+
+Para el primer caso alcanza con eliminar los numeros de las columnas y transformar estas en columnas de tipo numerico. En el segundo caso necesitamos hacer un mapeo donde cada string sea reemplazada por el numero que le corresponde.
+
+En ambos casos, para poder operar seria conveniente marcar las columnas del inicio y el fin del cuestionario asi que vamos a modificar el nombre unicamente de esas columnas.
+
+```{r}
+dataset1_clean <- dataset1_clean %>%
+  rename(
+    inicio_fomo = `A veces me pregunto si le dedico demasiado tiempo a estar pendiente de lo que está pasando.`,
+    fin_fomo = `Cuando la paso bien, es importante para mí compartir los detalles en línea (p.ej. actualizando el estado).`
+  )
+dataset2_clean <- dataset2_clean %>%
+  rename(
+    inicio_fomo = `A veces me pregunto si le dedico demasiado tiempo a estar pendiente de lo que está pasando.`,
+    fin_fomo = `Cuando la paso bien, es importante para mí compartir los detalles en línea (p.ej. actualizando el estado).`
+  )
+```
+
+
+### FOMO dataset1
+
+Para el `dataset1` usamos un regex para dejar unicamente los digitos y, posteriormente, transformamos esas mismas columnas en numerico.
+
+```{r}
+dataset1_clean <- dataset1_clean %>% 
+  mutate(
+    across(inicio_fomo:fin_fomo, str_extract, pattern = '\\d'),
+    across(inicio_fomo:fin_fomo, as.integer)
+    )
+```
+
+## FOMO dataset2
+
+Para el `dataset2` tenemos que definir el mapeo de strings a numeros para lo cual generamos un vector nombrado. 
+
+```{r}
+fomo_maping <- c(
+  "Nada" = "1",
+  "Un poco" = "2",
+  "Moderadamente" = "3",
+  "Bastante" = "4",
+  "Mucho" = "5"
+)
+```
+
+Con el mapeo definido podemos aplicarlo al dataframe y transformar las columnas resultantes en columnas de tipo numerico.
+
+```{r}
+dataset2_clean <- dataset2_clean %>% 
+  mutate(
+    across(inicio_fomo:fin_fomo, str_replace_all, pattern = fomo_maping),
+    across(inicio_fomo:fin_fomo, as.integer)
+  ) 
+```
+
+## Union
+
+```{r}
+dataset_combinado <- rbind(
+  dataset1_clean,
+  dataset2_clean
+)
+```
+
+# Calculo de FOMO
+
+Para calcular los puntajes de la escala de Fear of Missing Out (FOMO) utilizada, simplemente hay que sumar los numeros que respondieron las personas. A su vez, considerando que hay 10 items en la escala y por lo tanto el valor maximo es 50, seria conveniente contar tambien con un puntaje relativizado. 
+
+```{r}
+dataset_combinado_prepro <- dataset_combinado %>%
+  mutate(
+    fomo_puntaje = rowSums(across(inicio_fomo:fin_fomo)),
+    fomo_relativo = fomo_puntaje/50
+  ) 
+```
+
+# Transformacion de las variables de uso
+
+Hay 7 columnas que reflejan variables sobre el uso activo o pasivo de los sujetos. Los valores de estas columnas contienen, en algunos casos, una string junto con el numero (que es lo que nos interesa) por lo que lo primero que tenemos que hacer es extraer de estas columnas los numeros usando un regex luego de lo cual transformamos esas mismas columnas en numericas. 
+
+Por ultimo renombramos esas columnas para darles nombres mas cortos para trabajar y mas representativos. 
+
+```{r}
+dataset_combinado_prepro <- dataset_combinado_prepro %>% 
+  mutate(across(starts_with('Por favor, indicá'), .fns =str_extract, pattern = '\\d'),
+         across(starts_with('Por favor, indicá'), .fns = as.integer)) %>% 
+  rename(
+        "A1" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Mandarme mensajes con amigos, familiares, conocidos]",
+        "P1" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Mirar las publicaciones/historias de otras personas]",
+        "P2" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Navegar en el inicio de Instagram]",
+        "A2" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Publicar fotos/videos en el perfil o historias]",
+        "A3" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Darle \"like\" a publicaciones o historias de otras personas]",
+        "A4" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Comentar publicaciones o historias]",
+        "P3" = "Por favor, indicá cuánto tiempo pasas en cada una de estas actividades al usar Instagram, siendo 0: Nada y 5: Todo el tiempo. [Mirar el feed de noticias y/o buscar información]" 
+  )
+```
+
+
+
