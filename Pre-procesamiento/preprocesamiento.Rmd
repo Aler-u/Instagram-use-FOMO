@@ -7,7 +7,7 @@ output: html_notebook
 library(tidyverse)
 ```
 
-
+Se cargan ambos datasets
 
 ```{r}
 dataset1 <- read_csv('../Datos/DatosReales/EXCEL PRIMER FORMULARIO - 01 Percepciones del uso, FOMO y tiempo de uso real de Instagram en jóvenes argentinos.csv')
@@ -22,44 +22,61 @@ El `dataset1` tiene varios errores en la carga de datos. Por eso cuenta con mas 
 
 Hay muchos nombres duplicados asi que vamos a estandarizarlo. 
 
+La columna `Hasta la fecha, ¿cuántas publicaciones tenés en tu cuenta personal? Duplicado` indica el valor "corregido" de la columna `Hasta la fecha, ¿cuántas publicaciones tenés en tu cuenta personal?` ya que los sujetos podian poner mas que solo numeros lo cual llevo a respuestas como "Aproximadamente 60". Por eso para este caso vamos a tomar unicamente esta columna como valida y vamos a eliminar la original pero para igualar el nombre vamos a modificarlo por el de la original. 
+
 ```{r}
+dataset1 <- dataset1 %>% select(-`Hasta la fecha, ¿cuántas publicaciones tenés en tu cuenta personal?`) %>%
+  rename(
+    'Hasta la fecha, ¿cuántas publicaciones tenés en tu cuenta personal?'='Hasta la fecha, ¿cuántas publicaciones tenés en tu cuenta personal? Duplicado'
+  )
+```
+
+La columna `Error...11` en realidad indica si el numero que aparece en la ex-columna `Hasta la fecha, ¿cuántas publicaciones tenés en tu cuenta personal? Duplicado` proviene de una correccion de manera de saber que ese dato puede no ser muy fidedigno. Es conveniente entonces incorporar esta columna pero modificarle el nombre y tambien hay que agregarla al dataset2 para mantener la misma estructura. En este ultimo caso el dataset2 tendria 0 en todos los campos de esta columna porque no hay valores que hayan tenido que ser corregidos. 
+
+```{r}
+dataset1 <- dataset1 %>% rename(
+  error_publicaciones = `Error...11` #bool que marca un error en el reporte de la cantidad de publicaciones
+)
+dataset2$error_publicaciones <- 0
+```
+
+La columna `Corrección...12` esta en la misma situacion que la columna `Error...11` por lo que repetimos el procedimiento. 
+
+```{r}
+dataset1 <- dataset1 %>% rename(
+  correccion_publicaciones = `Corrección...12` #string que marca una coreccion en el reporte de la cantidad de publicaciones
+)
+dataset2$correccion_publicaciones <- NaN
+```
+
+
+El mismo procedimiento lo aplicamos con la columna `¿Cuántos seguidores tenés?` y `¿A cuántas cuentas seguís?` y sus correspondientes columnas de error y correccion. 
+
+```{r}
+dataset1 <- dataset1 %>% select(-`¿Cuántos seguidores tenés?`, -`¿A cuántas cuentas seguís?`) %>%
+  rename(
+    '¿Cuántos seguidores tenés?'='¿Cuántos seguidores tenés? Duplicado',
+    '¿A cuántas cuentas seguís?'='¿A cuántas cuentas seguís? Duplicado'
+  )
 dataset1_clean <- dataset1 %>%
   rename(
-    'Error_pub' = 'Error...11', #bool que marca un error en el reporte de la cantidad de publicaciones
-    'Correccion_pub' = 'Corrección...12', #string que marca una coreccion en el reporte de la cantidad de publicaciones
-    'Error_followers' = 'Error...15', #bool que marca un error en el reporte de la cantidad de seguidores
-    'Correccion_followers' = 'Corrección...16', #string que marca una correccion en el reporte de la cantidad de seguidores
-    'Error_following' = 'Error...19', #bool que marca un error en el reporte de la cantidad de personas que siguen con su cuenta
-    'Correccion_following' = 'Corrección...20', #string que marca una correccion en el reporte de la cantidad de personas que siguen con su cuenta
-    'Error_general' = 'Error...50' #bool que marca un error en algun punto para ese sujeto
+    error_seguidores = `Error...15`, #bool que marca un error en el reporte de la cantidad de seguidores
+    error_siguiendo = `Error...19`, #bool que marca un error en el reporte de la cantidad de personas que siguen con su cuenta
+    correccion_seguidores = `Corrección...16`, #string que marca una correccion en el reporte de la cantidad de seguidores
+    correccion_siguiendo = `Corrección...20`, #string que marca una correccion en el reporte de la cantidad de personas que siguen con su cuenta
+    error_general = 'Error...50' #bool que marca un error en algun punto para ese sujeto
   )
-```
 
-
-## Eliminacion de columnas
-
-Las columnas relativas al error de cada sujeto pueden ser significativas en el contexto del dataset 1 pero no lo son en el contexto de unir ambos datasets. Para esto vamos a eliminar todas las columnas que empiezen o terminen con la palabra _'Error'_ o que empiecen con la palabra _'Correccion'_.
-
-```{r}
-dataset1_clean <- dataset1_clean %>%
-  select(!starts_with('Error')) %>% select(!starts_with('Correccion')) %>% select(!ends_with('Error'))
-```
-
-Tambien tengo que eliminar aquellas columnas que corresponden a los campos que pueden contener errores en el llenado de datos. En principio esto implicaria las 3 columnas correspondientes a los datos relativos a las cuentas de Instagram. 
-
-```{r}
-dataset1_clean <- dataset1_clean %>% 
-  select(
-    !c(`Hasta la fecha, ¿cuántas publicaciones tenés en tu cuenta personal?`,
-       `¿Cuántos seguidores tenés?`,
-       `¿A cuántas cuentas seguís?`)
+dataset2_clean <- dataset2 %>% mutate(
+    error_seguidores = 0,
+    error_siguiendo = 0,
+    correccion_seguidores = NaN,
+    correccion_siguiendo = NaN
+) %>%
+  rename(
+    error_general = Error,
+    `Tipo de Error` = `Tipo de error`
   )
-```
-
-De las columnas que sobraron hay que eliminar la palabra _'Duplicado'_ del nombre de la columna y eliminamos el _whitespace_ al principio y al final de los nombres de las columnas. 
-
-```{r}
-colnames(dataset1_clean) <- str_replace(colnames(dataset1_clean), 'Duplicado', '') %>% str_trim()
 ```
 
 
@@ -70,23 +87,22 @@ colnames(dataset1_clean) <- str_replace(colnames(dataset1_clean), 'Duplicado', '
 Primero vamos a intentar unir los dataframes, para eso tenemos que chequear que los nombres y la cantidad de columnas sean las mismas.
 
 ```{r}
-ncol(dataset1_clean) == ncol(dataset2)
+ncol(dataset1_clean) == ncol(dataset2_clean)
 ```
-
-La cantidad de columnas es la misma.
+La cantidad de columnas no es la misma.
 
 Hay que comparar que no haya columnas que no estan en el `dataset2` pero estan en el `dataset1`. 
 
 ```{r}
 #columnas_extra <- 
-colnames(dataset1_clean)[!colnames(dataset1_clean) %in% colnames(dataset2)]
+colnames(dataset1_clean)[!colnames(dataset1_clean) %in% colnames(dataset2_clean)]
 ```
-Supuestamente no hay diferencia en la cantidad de columnas pero aca vemos muchas columnas que no estan en un dataset y si en el otro. Eso nos estaria hablando de incompatibilidades en el nombre mas que de columnas que sobran o faltan.
+Vemos muchas columnas que no estan en un dataset y si en el otro. Eso nos estaria hablando de incompatibilidades en el nombre mas que de columnas que sobran o faltan.
 
 Para comprobarlo necesitamos revisar los nombres de las columnas del `dataset2` que no estan en el 1
 
 ```{r}
-colnames(dataset2)[!colnames(dataset2) %in% colnames(dataset1_clean)]
+colnames(dataset2_clean)[!colnames(dataset2_clean) %in% colnames(dataset1_clean)]
 ```
 
 Por ejemplo, la columna `Actualmente, ¿tenés cuenta en Instagram?` en realidad si esta presente en el `dataset1` solo que con un nombre ligeramente distinto (`Actualmente, ¿tenés una cuenta en Instagram?`).  
@@ -106,13 +122,6 @@ dataset1_clean <- dataset1_clean %>%
       "Ahora te solicitamos que ingreses en tu perfil PERSONAL de Instagram (no puede ser una cuenta utilizada para fines laborales, como por ejemplo un emprendimiento, u otros fines). Una vez que ingreses, por favor seguí los siguientes pasos:"
     )
   )
-```
-
-Asi tambien eliminamos las columnas de `Error` y `Tipo de Error` del `dataset2`.
-
-```{r}
-dataset2_clean <- dataset2 %>% 
-  select(!contains('Error'))
 ```
 
 Con el resto de las columnas nos queda la tarea de renombrarlas. Vamos a usar como base el `dataset2` por ser el mas nuevo y el mas limpio de ambos con lo cual las columnas del `dataset1` se van a renombrar a su homologo del `dataset2`. 
@@ -186,6 +195,12 @@ dataset2_clean <- dataset2_clean %>%
   ) 
 ```
 
+## Tipo de variable temporal
+
+```{r}
+dataset1_clean <- dataset1_clean %>% mutate(`Promedio Diario` = parse_time(`Promedio Diario`))
+```
+
 ## Union
 
 ```{r}
@@ -211,7 +226,7 @@ dataset_combinado_prepro <- dataset_combinado %>%
 
 Hay 7 columnas que reflejan variables sobre el uso activo o pasivo de los sujetos. Los valores de estas columnas contienen, en algunos casos, una string junto con el numero (que es lo que nos interesa) por lo que lo primero que tenemos que hacer es extraer de estas columnas los numeros usando un regex luego de lo cual transformamos esas mismas columnas en numericas. 
 
-Por ultimo renombramos esas columnas para darles nombres mas cortos para trabajar y mas representativos. 
+Por ultimo renombramos esas columnas para darles nombres mas cortos para trabajar y mas representativos. El prefijo _"A"_ indica que se trata de una columna relativa a una variable destinada a medir el uso activo y el prefijo _"B"_ indica que se trata de una variable destinada a medir el uso pasivo. 
 
 ```{r}
 dataset_combinado_prepro <- dataset_combinado_prepro %>% 
@@ -229,4 +244,43 @@ dataset_combinado_prepro <- dataset_combinado_prepro %>%
 ```
 
 
+# Renombre de variables significativas
+
+Hay muchas variables en el dataframe que son muy importantes para el trabajo pero tienen nombres demasiado largos. El proposito ahora entonces es renombrarlas para que tengan nombres mas cortos (de esta manera, que sea mas sencillo trabajar con ellas) y representativos. 
+```{r}
+dataset_combinado_prepro <- dataset_combinado_prepro %>%
+  rename(
+    "publicaciones" = "Hasta la fecha, ¿cuántas publicaciones tenés en tu cuenta personal?",
+    "followers" = "¿Cuántos seguidores tenés?",
+    "following" = "¿A cuántas cuentas seguís?",
+    "selfperception_cat" = "En la última semana, en promedio, ¿cuánto tiempo por día crees que pasaste usando Instagram?",
+    "selfperception_num" = "En la última semana, en promedio, ¿cuánto tiempo por día crees que pasaste usando Instagram? (Por ejemplo: Si creés que la usaste en promedio 1hs 30 min por día, poné 01:30)",
+    "selfperception_confidence" = "¿Con qué nivel de confianza creés que pudiste determinar correctamente la cantidad de tiempo que usas Instagram?",
+    "otherperception_cat" = "En la última semana, en promedio, ¿cuánto tiempo por día crees que las personas de tu misma edad pasaron usando Instagram?",
+    "otherperception_num" = "En la última semana, en promedio, ¿cuántas horas por día crees que las personas de tu misma edad pasaron usando Instagram? (Por ejemplo: Si creés que lo usaron en promedio 1hs 30 min por día, poné 01:30)",
+    "otherperception_confidence" = "¿Con qué nivel de confianza creés que pudiste determinar correctamente la cantidad de tiempo que las personas de tu edad usan Instagram?",
+    "uso_screnshot" = "Promedio Diario",
+    "uso_autoreporte" = "Si no pudiste adjuntar el screenshot, por favor escribí tu Promedio Diario de uso. Ejemplo: 01:10",
+    "cuenta" = "Por último, sería de mucha utilidad que pudieras dejarnos tu usuario de Instagram. Esto es completamente OPCIONAL. Recordá que los datos obtenidos tienen carácter de confidencialidad, respaldados por esta investigación solo con fines académicos. Ningún dato personal de tu identidad será compartido ni publicado. Gracias por tu participación!"
+  )
+```
+
+
+# Transformacion de variables significativas
+
+Algunas variables relativas al uso de la cuenta no estan clasificadas como de tipo numerica en sus columnas por lo cual las transformamos para solucionarlo. 
+
+```{r}
+dataset_combinado_prepro <- dataset_combinado_prepro %>% mutate(
+  publicaciones = as.integer(publicaciones),
+  following = as.integer(following), 
+  selfperception_num = as.double(selfperception_num),
+  otherperception_num = as.double(otherperception_num), 
+  uso_screnshot = as.double(uso_screnshot)
+  )
+```
+
+```{r}
+save()
+```
 

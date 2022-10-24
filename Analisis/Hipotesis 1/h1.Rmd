@@ -1,0 +1,87 @@
+---
+title: "Hipotesis 1"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(boot)
+library(ggridges)
+```
+
+
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+h1_dataset <- dataset_combinado_prepro %>% drop_na(uso_screnshot)
+```
+
+Como primera medida graficamos la relacion entre ambas variables
+
+```{r}
+ggplot(
+  data = h1_dataset,
+  aes(x = fomo_puntaje, y = uso_screnshot)
+) +
+  geom_jitter() +
+  geom_smooth(method = 'lm', se = F) +
+  geom_smooth(method = 'loess', color = 'red', se = F, linetype = 'dashed')
+```
+
+Dados los resultados del grafico podemos concluir que probablemente no haya ninguna asociacion entre las variables y que tampoco hay patrones no lineales evidentes en los datos por lo que vamos a formalizar el analisis corriendo dos tipos de correlaciones distintas.
+
+Corremos dos correlaciones, de Spearman y Pearson sobre los mismos datos. 
+
+```{r}
+cor(h1_dataset$fomo_puntaje, h1_dataset$uso_screnshot)
+cor(h1_dataset$fomo_puntaje, h1_dataset$uso_screnshot, method = 'spearman')
+```
+
+En ambos casos los resultados son muy cercanos a 0 pero para obtener intervalos de confianza que nos permitan hacer inferencia con estos datos vamos a generar 10 mil muestras bootstrap provenientes de un bootstrap no parametrico calculando para cada muestra ambos estadisticos.
+
+```{r}
+corr_boot <- function(data, indices){
+  boot_data <- data[indices,]
+  pearson_value <- cor(boot_data$fomo_puntaje, boot_data$uso_screnshot)
+  spearman_value <- cor(boot_data$fomo_puntaje, boot_data$uso_screnshot, method = 'spearman')
+  c(pearson_value, spearman_value)
+}
+
+boot_test <- boot(
+        data = h1_dataset,
+        statistic = corr_boot,
+        R = 10000,
+        parallel = 'multicore',
+        ncpus = 4
+      )
+```
+
+Ahora calculamos intervalos de confianza para cada caso
+
+```{r}
+boot.ci(boot_test, index = 1)
+boot.ci(boot_test, index = 2)
+```
+En ambos casos los intervalos nos indican que no hay señal de ninguna asociacion entre las variables. 
+
+Por ultimo podemos graficar la distribucion del estadistico para cada estadistico.
+
+```{r}
+boot_test$t %>% as_tibble %>%
+  rename(
+    Pearson = V1,
+    Spearman = V2
+  ) %>%
+  pivot_longer(cols = c(Pearson,Spearman)) %>%
+  ggplot(aes(x = value, y = name, fill = name)) +
+    geom_density_ridges(stat = "binline", bins = 50, scale = 0.95, draw_baseline = FALSE) +
+  geom_vline(xintercept = 0, linetype = 'dashed') +
+  theme_classic() +
+  xlab("Valor del estadistico") + ylab("Tipo de estadistico") +
+  scale_fill_discrete('Estadistico')
+ggsave('h1.png')
+```
+
