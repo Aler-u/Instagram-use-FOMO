@@ -7,18 +7,21 @@ output: html_notebook
 library(tidyverse)
 library(boot)
 library(ggridges)
+library(ggpubr)
 ```
 
 Eliminamos todos los casos donde no hay datos sobre el uso de horas reales de instagram. 
 
 ```{r}
-h1_dataset <- dataset_combinado_prepro %>% drop_na(uso_screnshot)
+set.seed(1234)
+load('../../Pre-procesamiento/dataset_final.rda')
+h1_dataset <- final_dataset %>% drop_na(uso_screnshot)
 ```
 
 Como primera medida graficamos la relacion entre ambas variables
 
 ```{r}
-ggplot(
+linea_fit_plot <- ggplot(
   data = h1_dataset,
   aes(x = fomo_puntaje, y = uso_screnshot)
 ) +
@@ -26,7 +29,9 @@ ggplot(
   geom_smooth(method = 'lm', se = F) +
   geom_smooth(method = 'loess', color = 'red', se = F, linetype = 'dashed') +
   theme_classic() +
+  scale_y_log10() +
   ylab('Tiempo de uso real (segundos)') + xlab('Puntaje de la escala de FOMO')
+linea_fit_plot
 ggsave('scater_h1.png')
 ```
 
@@ -52,7 +57,7 @@ h1_loo_res <- tibble(correlacion_loo = loo_cor,
 Graficamos entonces el valor la variacion en la correlacion segun el indice del sujeto como el valor de la correlacion sin ese sujeto y el color segun la division antes descrita. 
 
 ```{r}
-h1_loo_res %>% ggplot(
+loo_res_plot <- h1_loo_res %>% ggplot(
     aes(x = indice, y = correlacion_loo, color = diferencia)
   ) +
   geom_point() +
@@ -63,6 +68,7 @@ h1_loo_res %>% ggplot(
   theme_classic() + 
   theme(legend.position = 'bottom') +
   ylab('Correlacion de Speraman') + xlab("Indice")
+loo_res_plot
 ggsave('loo_cor_h1.png')
 ```
 
@@ -71,7 +77,7 @@ No se observan valores altamente influyentes que pudieran preocuparnos. De ahora
 Corremos una correlacion de Spearman sobre los mismos datos. 
 
 ```{r}
-cor(h1_dataset$fomo_puntaje, h1_dataset$uso_screnshot, method = 'spearman')
+cor.test(h1_dataset$fomo_puntaje, h1_dataset$uso_screnshot, method = 'spearman')
 ```
 
 Los resultados son muy cercanos a 0 pero para obtener intervalos de confianza que nos permitan hacer inferencia con estos datos vamos a generar 10 mil muestras bootstrap provenientes de un bootstrap no parametrico calculando el estadistico de interes.
@@ -100,15 +106,59 @@ boot.ci(boot_test)
 
 En todos los casos los intervalos nos indican que no hay señal de ninguna asociacion entre las variables. 
 
+Calculamos tambien cuantas muestras boostrap tuvieron valores por encima de 0.
+
+```{r}
+sum(boot_test$t > 0)/length(boot_test$t)
+```
+
+
 Por ultimo podemos graficar la distribucion del estadistico para cada estadistico.
 
 ```{r}
-ggplot(
+boot_hist_plot <- ggplot(
   data = data.frame(x = boot_test$t), aes(x = x)) +
   geom_histogram(fill = 'white', color = 'black') +
   geom_vline(xintercept = 0, linetype = 'dashed') +
   theme_classic() +
   xlab("Valor del estadistico") + ylab("Frecuencia")
-ggsave('h1.png')
+boot_hist_plot
+ggsave('boot_h1.png')
 ```
+
+Combinamos todos los graficos en uno solo
+
+```{r}
+ggarrange(
+  linea_fit_plot, loo_res_plot,
+  labels = c('A', 'B'),
+  ncol = 2, nrow = 1
+)
+ggsave('h1.png',
+       width = 25, height = 12, units = "cm")
+```
+
+
+Ahora realizamos la misma correlacion pero excluyendo los sujetos que presentan inconsistencias en su respuesta
+
+```{r}
+cor.test(
+  h1_dataset %>% filter(error_selfperception == F & error_otherperception == F) %>% pull(fomo_puntaje),
+  h1_dataset %>% filter(error_selfperception == F & error_otherperception == F) %>% pull(uso_screnshot),
+  method = 'spearman'
+)
+```
+
+Calculamos los intervalos de confianza
+
+```{r}
+boot(
+        data = h1_dataset %>% filter(error_selfperception == F & error_otherperception == F),
+        statistic = corr_boot,
+        R = 10000,
+        parallel = 'multicore',
+        ncpus = 4
+      ) %>% boot.ci()
+```
+
 

@@ -11,7 +11,7 @@ Se cargan ambos datasets
 
 ```{r}
 dataset1 <- read_csv('../Datos/DatosReales/EXCEL PRIMER FORMULARIO - 01 Percepciones del uso, FOMO y tiempo de uso real de Instagram en jóvenes argentinos.csv')
-dataset2 <- read_csv('../Datos/DatosReales/EXCEL (respuestas) - Respuestas de formulario 1.csv')
+dataset2 <- read_csv('../Datos/DatosReales/EXCEL (respuestas) - Respuestas de formulario 1(1).csv')
 ```
 
 # Limpieza Dataset 1
@@ -280,7 +280,106 @@ dataset_combinado_prepro <- dataset_combinado_prepro %>% mutate(
   )
 ```
 
+# Criterios de exclusion
+
+## Edad
+
+El rango etario esta comprendido entre los 18 y los 35 años asi que excluimos a todos aquellos que estan por fuera de ese rango.
+
 ```{r}
-save()
+dataset_filtered <- dataset_combinado_prepro %>% filter(between(Edad, 18 ,35))
+nrow(dataset_combinado_prepro) - nrow(dataset_filtered)
 ```
+
+## Uso de redes
+
+Chequeamos que todos los que hayan respondido tengan un celular con aplicaciones moviles.
+
+```{r}
+all(
+  dataset_filtered$`¿Tenés celular con aplicaciones móviles?` == 'Si' | dataset_filtered$`¿Tenés celular con aplicaciones móviles?` == 'Sí'
+)
+```
+Que todos tengan una cuenta de instagram.
+
+```{r}
+all(
+  dataset_filtered$`Actualmente, ¿tenés cuenta en Instagram?` == 'Si' | dataset_filtered$`Actualmente, ¿tenés cuenta en Instagram?` == 'Sí'
+)
+```
+
+Que todos tengan una cuenta de uso personal
+
+```{r}
+all(
+  dataset_filtered$`¿Tenés cuenta de uso personal?` == 'Si' | dataset_filtered$`¿Tenés cuenta de uso personal?` == 'Sí'
+)
+```
+Vemos con detalle cuantos hay que no tengan cuentas de instagram de uso personal
+
+```{r}
+sum(dataset_filtered$`¿Tenés cuenta de uso personal?` == 'No')
+```
+Los excluimos de nuestros datos
+
+```{r}
+dataset_filtered <- dataset_filtered %>% filter(!`¿Tenés cuenta de uso personal?` == 'No')
+```
+
+## Auto-reporte de uso
+
+Excluimos los sujetos que no dieron ningun dato sobre su uso real de instagram.
+
+```{r}
+dataset_filtered <- dataset_filtered %>% filter(
+  is.na(uso_screnshot) == F | is.na(uso_autoreporte) == F
+)
+```
+
+Completamos en la columna de `uso_screnshot` los datos del autoreporte para aquellos que no dieron una captura de pantalla.
+
+```{r}
+dataset_filtered$uso_autoreporte[which(is.na(dataset_filtered$uso_screnshot))]
+```
+
+
+```{r}
+dataset_filtered[
+  which(is.na(dataset_filtered$uso_screnshot)),
+  'uso_screnshot'
+] <- c(3 * 3600,
+       1.42 * 3600,
+       36000,
+       3360, 
+       10200)
+```
+
+
+## Auto Percepcion
+
+```{r}
+dataset_filtered <- dataset_filtered %>% filter(
+  is.na(selfperception_cat) == F &
+  is.na(selfperception_num) == F &
+  is.na(otherperception_cat) == F &
+  is.na(otherperception_num) == F
+)
+```
+
+
+
+# Data Save
+
+Guardamos los resultados hasta ahora
+
+```{r}
+save(dataset_combinado_prepro, file = 'prepro_dataset.rda')
+```
+
+
+# Inconsistencias en la estimacion del uso
+
+Durante la exploracion de la segunda y tercera hipotesis encontramos que hubo inconsistencias entre las respuestas de los sujetos estimando su propio uso de Instagram segun si respondieron utilizando categorias o dando respuestas numericas precisas. 
+
+
 

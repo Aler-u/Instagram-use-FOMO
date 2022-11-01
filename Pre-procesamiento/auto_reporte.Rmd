@@ -1,0 +1,276 @@
+---
+title: "Inconsistencias en el auto-reporte"
+output: html_notebook
+---
+
+```{r}
+load('prepro_dataset.rda')
+library(tidyverse)
+```
+
+
+# Inconsistencias en la estimacion del uso
+
+Durante la exploracion de la segunda y tercera hipotesis encontramos que hubo inconsistencias entre las respuestas de los sujetos estimando su propio uso de Instagram segun si respondieron utilizando categorias o dando respuestas numericas precisas. 
+
+
+En primera medida graficamos la distribucion de la diferencia entre el uso real y la percepcion con la media marcada como una linea punteada. 
+
+```{r}
+h2_dataset <- dataset_filtered %>%
+  drop_na(uso_screnshot) %>%
+  mutate(
+    autopercepcion = selfperception_num - uso_screnshot
+  )
+
+ggplot(
+  data = h2_dataset,
+  aes(x = autopercepcion)
+) +
+  geom_histogram() +
+  geom_vline(xintercept = mean(h2_dataset$autopercepcion), linetype = 'dashed')
+```
+
+Es notable que hay una cantidad de valores muy extremos, podemos explorar esos valores en detalle buscando los 10 valores mas grandes. 
+
+```{r}
+h2_dataset %>% arrange(desc(autopercepcion)) %>% select(
+  c(autopercepcion, selfperception_cat, selfperception_num, uso_screnshot)
+) %>% mutate(
+  selfperception_num = selfperception_num/3600,
+  uso_screnshot = uso_screnshot/3600
+  ) %>%
+  head(10)
+```
+
+El primer valor indico un uso de 1 o 2 horas por dia en tanto categoria pero numericamente indico mas de 22 horas. Ya de por si el valor es altamente incompatible con el valor indicado en la categoria y ademas es virtualmente irreal. Por el otro lado el segundo valor indico un valor numerico muy por arriba tambien del indicado en la categoria. Lo mismo sucede con varios de estos valores. 
+
+Para sistematizar este procedmiento podemos ver la asociacion entre la respuesta categorica y la respuesta numerica. Para eso filtramos por las distintas categorias y para distintas categorias analizamos los casos incompatibles. 
+
+
+## Categoria mas de 3 hs por dia
+
+Esta categoria es sencilla hay que ver si el uso reportado es mayor a 3 horas.
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == 'Más de 3 hs por día') %>% count(selfperception_num/3600 >= 3) %>%
+  mutate(prop = n/sum(n))
+```
+
+Tenemos una cantidad no menor de datos por debajo de ese valor. 
+
+Podemos ver en detalle cuales fueron los valores que estuvieron alejados de ese numero 
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == 'Más de 3 hs por día' & selfperception_num/3600 < 3) %>% 
+  transmute(value = selfperception_num/3600) %>% 
+  ggplot(
+    aes(x = value)
+  ) +
+  geom_histogram() +
+  geom_vline(xintercept = 3)
+```
+
+La distribucion no presenta ningun patron aparente, hay valores sorprendementemente tan bajos como una hora. 
+
+
+## Categoria 2-3 hs por día
+
+Para esta categoria tenemos que contemplar el intervalo de 2 a 3 horas es decir menor o igual y mayor o igual a esos valores. 
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == '2-3 hs por día') %>% count(between(selfperception_num/3600, 2, 3)) %>%
+  mutate(prop = n/sum(n))
+```
+
+En este caso la enorme mayoria estuvo dentro de esos valores aunque de nuevo conviene ver donde se dieron estos valores. 
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == '2-3 hs por día' & !between(selfperception_num/3600, 2, 3)) %>% 
+  transmute(value = selfperception_num/3600) %>% 
+  ggplot(
+    aes(x = value)
+  ) +
+  geom_histogram() +
+  geom_vline(xintercept = 2) + geom_vline(xintercept = 3)
+```
+
+La mayoria de los valores son por arriba de 3 aunque hay una cantidad no necesariamente despreciable por debajo de 2. De nuevo agregamos una etiqueta a estos valores para identificarlos. 
+Seria interesante ahora analizar los valores en concreto. 
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == '2-3 hs por día' & !between(selfperception_num/3600, 2, 3)) %>% 
+  transmute(value = selfperception_num/3600)
+```
+Algunos valores son completamente incompatibles como el de 5 horas pero hay otros valores como el de 3.3 horas que quizas provino de una confusion en la consigna. 
+
+
+## Categoria 1-2 hs por día
+
+Vamos ahora con la categoria de uso de entre 1 y 2 horas por dia. 
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == '1-2 hs por día' & !between(selfperception_num/3600, 1, 2)) %>% 
+  transmute(value = selfperception_num/3600) %>% 
+  ggplot(
+    aes(x = value)
+  ) +
+  geom_histogram() +
+  geom_vline(xintercept = 1) + geom_vline(xintercept = 2)
+```
+
+La mayoria de los valores estan por arriba del umbral maximo del intervalo para la respuesta categorica. 
+
+Ademas representan una proporcion muy chica del total de los datos para esta respuesta. 
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == '1-2 hs por día' & !between(selfperception_num/3600, 1, 2)) %>% 
+  transmute(value = selfperception_num/3600)
+```
+
+Como ya vimos, casi todos estan por arriba de 2. Algunos quizas fueron producto de una confusion (los 2.5) y otros estan claramente errados en su respuesta. 
+
+
+Ahora vemos en proporcion cuantos valores hay por fuera del rango contemplado en relacion al total. 
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == '1-2 hs por día') %>% count(between(selfperception_num/3600, 1, 2)) %>%
+  mutate(prop = n/sum(n))
+```
+
+
+## Categoria 31-60 min por día
+
+Para esta categoria contamos como validos valores de 1 hora (60 minutos) y de 30 minutos ademas de todos los que esten dentro de ese intervalo.
+
+Vamos a ir esta vez primero por los valores precisos expresados en segundos, minutos y horas antes de ir al grafico. 
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == '31-60 min por día' & !between(selfperception_num, 1800, 3600)) %>% 
+  transmute(
+    seconds = selfperception_num,
+    minutes = selfperception_num/60,
+    hours = selfperception_num/3600,
+  )
+```
+
+Todos los valores que estan por fuera del rango fueron adecuadamente detectados, algunos estan muy por afuera del rango. 
+
+En el grafico esta vez ponemos los minutos en el eje x en lugar de las horas. 
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == '31-60 min por día' & !between(selfperception_num, 1800, 3600)) %>% 
+  transmute(value = selfperception_num/60) %>% 
+  ggplot(
+    aes(x = value)
+  ) +
+  geom_histogram() +
+  geom_vline(xintercept = 31) + geom_vline(xintercept = 60)
+```
+
+Practicamente todos los valores estan por debajo del umbral y algunos muy por arriba. 
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == '31-60 min por día') %>%
+  count(between(selfperception_num, 1800, 3600)) %>%
+  mutate(prop = n/sum(n))
+```
+
+Es notable que en esta categoria un tercio de las respuestas fueron incompatibles con lo expresado numericamente.  
+
+
+## Categoria 10-30 min por día
+
+En este caso de nuevo vamos a proceder de la misma manera que en el caso de 31 a 60 minutos. Aca de nuevo ponemos como punto de corte 30 minutos inclusive. 
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == '10-30 min por día' & !between(selfperception_num, 600, 3600)) %>% 
+  transmute(
+    seconds = selfperception_num,
+    minutes = selfperception_num/60,
+    hours = selfperception_num/3600,
+  )
+```
+
+Hay apenas dos valores por fuera del rango pero estan muy por encima del umbral con valores de 2 y 3 horas. No tiene sentido en este punto graficar los datos. 
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == '10-30 min por día') %>%
+  count(between(selfperception_num, 600, 3600)) %>%
+  mutate(prop = n/sum(n))
+```
+
+Menos del 20% de las respuestas fueron incorrectas aunque es cierto que el numero total de respuesta de esta categoria es bajo. 
+
+
+## Categoria Menos de 10 min por día
+
+La ultima categoria "Menos de 10 min por día" va a tener como umbral cualquier valor menor a 10 inclusive. 
+
+```{r}
+h2_dataset %>% filter(selfperception_cat == 'Menos de 10 min por día' & selfperception_num > 600) %>% 
+  transmute(
+    seconds = selfperception_num,
+    minutes = selfperception_num/60,
+    hours = selfperception_num/3600,
+  )
+```
+
+Hubo unicamente 3 respuestas por fuera del rango para esta categoria. 
+
+
+## Identificacion de categorias problematicas
+
+Vamos a ponerle una etiqueta a aquellos que estuvieron fuera del rango contemplado por la categoria para poder identificarlos. Para asignar esta etiqueta vamos a crear una funcion para usar en todas las categorias, de esta manera generamos una sola funcion que sirva para todas las categorias. 
+
+```{r}
+categoria_incorrecta_fun <- function(cat_value, num_value){
+  if(cat_value == 'Más de 3 hs por día' & num_value < 10800){
+     return(TRUE)
+  } else if(cat_value == '2-3 hs por día' & !between(num_value, 7200, 10800)){
+    return(TRUE)
+  } else if(cat_value == '1-2 hs por día' & !between(num_value, 3600, 7200)){
+    return(TRUE)
+  } else if(cat_value == '31-60 min por día' & !between(num_value, 1800, 3600)){
+    return(TRUE)
+  } else if(cat_value == '10-30 min por día' & !between(num_value, 600, 1800)){
+    return(TRUE)
+  } else if(cat_value == '10-30 min por día' & num_value > 600){
+    return(TRUE)
+  } else {
+    return(FALSE)
+  }
+}
+```
+
+Corremos la funcion para la estimacion del tiempo propio y del tiempo ajeno.  
+
+```{r}
+h2_dataset$error_selfperception <- h2_dataset %>% select(selfperception_cat, selfperception_num) %>%
+  pmap(
+    ~ categoria_incorrecta_fun(.x, .y)
+  ) %>% unlist()
+h2_dataset$error_otherperception <- h2_dataset %>% select(otherperception_cat, otherperception_num) %>%
+  pmap(
+    ~ categoria_incorrecta_fun(.x, .y)
+  ) %>% unlist()
+```
+
+En primera medida nos interesa ver una tabla de frecuencias para ambos casos.
+
+```{r}
+h2_dataset %>% count(error_selfperception, error_otherperception)
+```
+
+
+```{r}
+h2_dataset %>% count(error_selfperception, error_otherperception) %>% mutate(n.rel = n/nrow(h2_dataset) * 100)
+```
+
+Vemos que si eliminamos todos los sujetos con respuestas extrañas nos quedariamos con unicamente 177 sujetos. Procedemos a guardar este nuevo dataset como el dataset final.
+
+```{r}
+final_dataset <- h2_dataset
+save(final_dataset, file = 'dataset_final.rda')
+```
+

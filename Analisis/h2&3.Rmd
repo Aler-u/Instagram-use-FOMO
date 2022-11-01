@@ -3,252 +3,466 @@ title: "R Notebook"
 output: html_notebook
 ---
 
-En primera medida graficamos la distribucion de la diferencia entre el uso real y la percepcion con la media marcada como una linea punteada. 
-
 ```{r}
-h2_dataset <- dataset_combinado_prepro %>%
-  drop_na(uso_screnshot) %>%
-  mutate(
-    autopercepcion = selfperception_num - uso_screnshot
-  )
-
-ggplot(
-  data = h2_dataset,
-  aes(x = autopercepcion)
-) +
-  geom_histogram() +
-  geom_vline(xintercept = mean(h2_dataset$autopercepcion), linetype = 'dashed')
+library(tidyverse)
+library(ggpubr)
+library(effectsize)
+load('../Pre-procesamiento/dataset_final.rda')
 ```
 
-Es notable que hay una cantidad de valores muy extremos, podemos explorar esos valores en detalle buscando los 10 valores mas grandes. 
+Creamos el nuevo dataset para este analisis eliminando aquellos usuarios que no reportaron horas reales de uso de instagram.
+
 ```{r}
-h2_dataset %>% arrange(desc(autopercepcion)) %>% select(
-  c(autopercepcion, selfperception_cat, selfperception_num, uso_screnshot)
-) %>% mutate(
-  selfperception_num = selfperception_num/3600,
-  uso_screnshot = uso_screnshot/3600
-  ) %>%
-  head(10)
+h2_dataset <- final_dataset %>%
+  drop_na(uso_screnshot)
 ```
 
-El primer valor indico un uso de 1 o 2 horas por dia en tanto categoria pero numericamente indico mas de 22 horas. Ya de por si el valor es altamente incompatible con el valor indicado en la categoria y ademas es virtualmente irreal. Por el otro lado el segundo valor indico un valor numerico muy por arriba tambien del indicado en la categoria. Lo mismo sucede con varios de estos valores. 
-
-Para sistematizar este procedmiento podemos ver la asociacion entre la respuesta categorica y la respuesta numerica. Para eso filtramos por las distintas categorias y para distintas categorias analizamos los casos incompatibles. 
-
-## Categoria mas de 3 hs por dia
-
-Esta categoria es sencilla hay que ver si el uso reportado es mayor a 3 horas.
+Posteriormente calculamos si la categoria que asignaron segun su autopercepcion coincide con las horas reales de uso de instagram. Para eso utilizamos una lookup table.
 
 ```{r}
-h2_dataset %>% filter(selfperception_cat == 'Más de 3 hs por día') %>% count(selfperception_num/3600 >= 3) %>%
-  mutate(prop = n/sum(n))
-```
-
-Tenemos una cantidad no menor de datos por debajo de ese valor. 
-
-Podemos ver en detalle cuales fueron los valores que estuvieron alejados de ese numero 
-
-```{r}
-h2_dataset %>% filter(selfperception_cat == 'Más de 3 hs por día' & selfperception_num/3600 < 3) %>% 
-  transmute(value = selfperception_num/3600) %>% 
-  ggplot(
-    aes(x = value)
-  ) +
-  geom_histogram() +
-  geom_vline(xintercept = 3)
-```
-
-La distribucion no presenta ningun patron aparente, hay valores sorprendementemente tan bajos como una hora. 
+lookup_table <- data.frame(
+  categoria = c('Más de 3 hs por día', '2-3 hs por día', '1-2 hs por día', '31-60 min por día', '10-30 min por día', 'Menos de 10 min por día'),
+  uper_bound = c(Inf, 10800, 7200, 3600, 1800, 600),
+  lower_bound = c(10800, 7200, 3600, 1860, 600, -Inf)
+)
 
 
-## Categoria 2-3 hs por día
-
-Para esta categoria tenemos que contemplar el intervalo de 2 a 3 horas es decir menor o igual y mayor o igual a esos valores. 
-
-```{r}
-h2_dataset %>% filter(selfperception_cat == '2-3 hs por día') %>% count(between(selfperception_num/3600, 2, 3)) %>%
-  mutate(prop = n/sum(n))
-```
-
-En este caso la enorme mayoria estuvo dentro de esos valores aunque de nuevo conviene ver donde se dieron estos valores. 
-
-```{r}
-h2_dataset %>% filter(selfperception_cat == '2-3 hs por día' & !between(selfperception_num/3600, 2, 3)) %>% 
-  transmute(value = selfperception_num/3600) %>% 
-  ggplot(
-    aes(x = value)
-  ) +
-  geom_histogram() +
-  geom_vline(xintercept = 2) + geom_vline(xintercept = 3)
-```
-
-La mayoria de los valores son por arriba de 3 aunque hay una cantidad no necesariamente despreciable por debajo de 2. De nuevo agregamos una etiqueta a estos valores para identificarlos. 
-Seria interesante ahora analizar los valores en concreto. 
-
-```{r}
-h2_dataset %>% filter(selfperception_cat == '2-3 hs por día' & !between(selfperception_num/3600, 2, 3)) %>% 
-  transmute(value = selfperception_num/3600)
-```
-Algunos valores son completamente incompatibles como el de 5 horas pero hay otros valores como el de 3.3 horas que quizas provino de una confusion en la consigna. 
-
-
-## Categoria 1-2 hs por día
-
-Vamos ahora con la categoria de uso de entre 1 y 2 horas por dia. 
-
-```{r}
-h2_dataset %>% filter(selfperception_cat == '1-2 hs por día' & !between(selfperception_num/3600, 1, 2)) %>% 
-  transmute(value = selfperception_num/3600) %>% 
-  ggplot(
-    aes(x = value)
-  ) +
-  geom_histogram() +
-  geom_vline(xintercept = 1) + geom_vline(xintercept = 2)
-```
-
-La mayoria de los valores estan por arriba del umbral maximo del intervalo para la respuesta categorica. 
-
-Ademas representan una proporcion muy chica del total de los datos para esta respuesta. 
-
-```{r}
-h2_dataset %>% filter(selfperception_cat == '1-2 hs por día' & !between(selfperception_num/3600, 1, 2)) %>% 
-  transmute(value = selfperception_num/3600)
-```
-
-Como ya vimos, casi todos estan por arriba de 2. Algunos quizas fueron producto de una confusion (los 2.5) y otros estan claramente errados en su respuesta. 
-
-
-Ahora vemos en proporcion cuantos valores hay por fuera del rango contemplado en relacion al total. 
-
-```{r}
-h2_dataset %>% filter(selfperception_cat == '1-2 hs por día') %>% count(between(selfperception_num/3600, 1, 2)) %>%
-  mutate(prop = n/sum(n))
-```
-
-
-## Categoria 31-60 min por día
-
-Para esta categoria contamos como validos valores de 1 hora (60 minutos) y de 30 minutos ademas de todos los que esten dentro de ese intervalo.
-
-Vamos a ir esta vez primero por los valores precisos expresados en segundos, minutos y horas antes de ir al grafico. 
-
-```{r}
-h2_dataset %>% filter(selfperception_cat == '31-60 min por día' & !between(selfperception_num, 1800, 3600)) %>% 
-  transmute(
-    seconds = selfperception_num,
-    minutes = selfperception_num/60,
-    hours = selfperception_num/3600,
-  )
-```
-
-Todos los valores que estan por fuera del rango fueron adecuadamente detectados, algunos estan muy por afuera del rango. 
-
-En el grafico esta vez ponemos los minutos en el eje x en lugar de las horas. 
-
-```{r}
-h2_dataset %>% filter(selfperception_cat == '31-60 min por día' & !between(selfperception_num, 1800, 3600)) %>% 
-  transmute(value = selfperception_num/60) %>% 
-  ggplot(
-    aes(x = value)
-  ) +
-  geom_histogram() +
-  geom_vline(xintercept = 31) + geom_vline(xintercept = 60)
-```
-
-Practicamente todos los valores estan por debajo del umbral y algunos muy por arriba. 
-
-```{r}
-h2_dataset %>% filter(selfperception_cat == '31-60 min por día') %>%
-  count(between(selfperception_num, 1800, 3600)) %>%
-  mutate(prop = n/sum(n))
-```
-
-Es notable que en esta categoria un tercio de las respuestas fueron incompatibles con lo expresado numericamente.  
-
-
-## Categoria 10-30 min por día
-
-En este caso de nuevo vamos a proceder de la misma manera que en el caso de 31 a 60 minutos. Aca de nuevo ponemos como punto de corte 30 minutos inclusive. 
-
-```{r}
-h2_dataset %>% filter(selfperception_cat == '10-30 min por día' & !between(selfperception_num, 600, 3600)) %>% 
-  transmute(
-    seconds = selfperception_num,
-    minutes = selfperception_num/60,
-    hours = selfperception_num/3600,
-  )
-```
-
-Hay apenas dos valores por fuera del rango pero estan muy por encima del umbral con valores de 2 y 3 horas. No tiene sentido en este punto graficar los datos. 
-
-```{r}
-h2_dataset %>% filter(selfperception_cat == '10-30 min por día') %>%
-  count(between(selfperception_num, 600, 3600)) %>%
-  mutate(prop = n/sum(n))
-```
-
-Menos del 20% de las respuestas fueron incorrectas aunque es cierto que el numero total de respuesta de esta categoria es bajo. 
-
-
-## Categoria Menos de 10 min por día
-
-La ultima categoria "Menos de 10 min por día" va a tener como umbral cualquier valor menor a 10 inclusive. 
-
-```{r}
-h2_dataset %>% filter(selfperception_cat == 'Menos de 10 min por día' & selfperception_num > 600) %>% 
-  transmute(
-    seconds = selfperception_num,
-    minutes = selfperception_num/60,
-    hours = selfperception_num/3600,
-  )
-```
-
-Hubo unicamente 3 respuestas por fuera del rango para esta categoria. 
-
-
-## Identificacion de categorias problematicas
-
-Vamos a ponerle una etiqueta a aquellos que estuvieron fuera del rango contemplado por la categoria para poder identificarlos. Para asignar esta etiqueta vamos a crear una funcion para usar en todas las categorias, de esta manera generamos una sola funcion que sirva para todas las categorias. 
-
-```{r}
-categoria_incorrecta_fun <- function(cat_value, num_value){
-  if(cat_value == 'Más de 3 hs por día' & num_value < 10800){
-     return(TRUE)
-  } else if(cat_value == '2-3 hs por día' & !between(num_value, 7200, 10800)){
-    return(TRUE)
-  } else if(cat_value == '1-2 hs por día' & !between(num_value, 3600, 7200)){
-    return(TRUE)
-  } else if(cat_value == '31-60 min por día' & !between(num_value, 1800, 3600)){
-    return(TRUE)
-  } else if(cat_value == '10-30 min por día' & !between(num_value, 600, 1800)){
-    return(TRUE)
-  } else if(cat_value == '10-30 min por día' & num_value > 600){
-    return(TRUE)
-  } else {
-    return(FALSE)
+sesgo_estimacion_fun <- function(cat_value, num_value){
+  acierto <- ifelse(
+    between(num_value, lookup_table[lookup_table$categoria == cat_value, 3], lookup_table[lookup_table$categoria == cat_value, 2]), 'ok', F
+    )
+  if(acierto == F){
+    if(
+      num_value > lookup_table[lookup_table$categoria == cat_value, 2] #Si el valor esta por encima del umbral superior
+    ){
+      return('sub')
+    }else{
+      return('sobre')
+    }
+  }else{
+    return(acierto)
   }
 }
 ```
 
-Corremos la funcion para la estimacion del tiempo propio y del tiempo ajeno.  
+Utilizando los objetos creados anteriormente calculamos para cada sujeto si subestimo, sobreestimo o tuvo una estimacion correcta.
 
 ```{r}
-h2_dataset$error_selfperception <- h2_dataset %>% select(selfperception_cat, selfperception_num) %>%
-  pmap(
-    ~ categoria_incorrecta_fun(.x, .y)
-  ) %>% unlist()
-h2_dataset$error_otherperception <- h2_dataset %>% select(otherperception_cat, otherperception_num) %>%
-  pmap(
-    ~ categoria_incorrecta_fun(.x, .y)
-  ) %>% unlist()
+h2_dataset <- h2_dataset %>% 
+  rowwise() %>%
+  mutate(
+  sesgo = sesgo_estimacion_fun(selfperception_cat, uso_screnshot)
+  )
+```
+
+Para responder a la segunda hipotesis vemos los puntajes en la escala de FOMO para los distintos tipos de respuesta.
+
+```{r}
+violin_fomo_sesgo_plot_all <- h2_dataset %>%
+  ggplot(aes(x = sesgo, y = fomo_puntaje, fill = sesgo)) +
+  geom_violin(alpha = 0.75, trim = F) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2)) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2), geom = 'errorbar', width = 0.1) +
+  ylab('FOMO') + xlab('Tipo de respuesta') +
+  scale_fill_discrete('Tipo de respuesta', labels = c('Correcta', 'Sobreestimacion', 'Subestimacion')) +
+  scale_x_discrete(
+    labels=c("ok" = "Correcta", "sobre" = "Sobreestimacion",
+                              "sub" = "Subestimacion"),
+    limits = c('sub', 'ok', 'sobre')
+  ) +
+  theme_classic()
+violin_fomo_sesgo_plot_all
+```
+
+Repetimos el mismo grafico pero esta vez excluimos aquellos sujetos cuya respuesta categorica no es consistente con su respuesta numerica.
+
+```{r}
+violin_fomo_sesgo_plot_self <- h2_dataset %>% filter(error_selfperception == FALSE) %>%
+  ggplot(aes(x = sesgo, y = fomo_puntaje, fill = sesgo)) +
+  geom_violin(alpha = 0.75, trim = F) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2)) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2), geom = 'errorbar', width = 0.1) +
+  ylab('FOMO') + xlab('Tipo de respuesta') +
+  scale_fill_discrete('Tipo de respuesta', labels = c('Correcta', 'Sobreestimacion', 'Subestimacion')) +
+  scale_x_discrete(
+    labels=c("ok" = "Correcta", "sobre" = "Sobreestimacion",
+                              "sub" = "Subestimacion"),
+    limits = c('sub', 'ok', 'sobre')
+  ) +
+  theme_classic()
+violin_fomo_sesgo_plot_self
+```
+
+De nuevo repetimos el mismo grafico pero excluyendo a todos los sujetos, quienes respondieron incosistentemente a cualquiera de las dos categorias
+
+```{r}
+violin_fomo_sesgo_plot_none <- h2_dataset %>% 
+  filter(error_selfperception == FALSE & error_otherperception == FALSE) %>%
+  ggplot(aes(x = sesgo, y = fomo_puntaje, fill = sesgo)) +
+  geom_violin(alpha = 0.75, trim = F) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2)) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2), geom = 'errorbar', width = 0.1) +
+  ylab('FOMO') + xlab('Tipo de respuesta') +
+  scale_fill_discrete('Tipo de respuesta', labels = c('Correcta', 'Sobreestimacion', 'Subestimacion')) +
+  scale_x_discrete(
+    labels=c("ok" = "Correcta", "sobre" = "Sobreestimacion",
+                              "sub" = "Subestimacion"),
+    limits = c('sub', 'ok', 'sobre')
+  ) +
+  theme_classic()
+violin_fomo_sesgo_plot_none
+```
+Combinamos todos los graficos en uno solo
+
+```{r}
+ggarrange(
+  violin_fomo_sesgo_plot_all, violin_fomo_sesgo_plot_self, violin_fomo_sesgo_plot_none,
+  labels = c('A', 'B', 'C'),
+  ncol = 1, nrow = 3
+)
+ggsave('test.png',
+       width = 15, height = 25, units = "cm")
+```
+
+Para hacer las comparaciones generamos un codigo que nos permita realizar permutaciones. La funcion toma simplemente un vector con dos categorias y un vector numerico con la variable de respuesta de interes. 
+
+```{r}
+permutaciones_mean <- function(categoria, respuesta){
+  shuffle_categoria <- sample(categoria, length(categoria))
+  
+  shuffle_df <- tibble(
+    shuf_cat = shuffle_categoria,
+    resp = respuesta
+  )
+  
+  shuffle_df %>%
+  group_by(shuf_cat) %>% summarise(x = mean(resp)) %>% summarise(x = diff(x)) %>% pull(x)
+}
+```
+
+Siendo que vamos a usar esto varias veces lo empaquetamos en una funcion. La funcion toma como argumentos un dataframe, una string con el nombre de la columna con la categoria (binaria) y una string con el nombre de la variable de respuesta que nos interesa. Devuelve como resultado un vector de permutaciones.
+
+```{r}
+comparacion_permutaciones_fn <- function(dataset, nombre_categoria, nombre_respuesta){
+  res_perm <- replicate(
+  10000,
+  permutaciones_mean(
+    dataset[[nombre_categoria]],
+    dataset[[nombre_respuesta]]
+    )
+  )
+  return(res_perm)
+}
+```
+
+Lo aplicamos primero comparando con la categoria de estimacion correcta para todos los sujetos usando 10 mil permutaciones.
+
+```{r}
+permutacion_ok <- comparacion_permutaciones_fn(h2_dataset %>% filter(sesgo != 'sobre'), 'sesgo', 'fomo_puntaje')
+```
+
+Graficamos el histograma de la distribucion de diferencias bajo la hipotesis nula.
+
+```{r}
+perm_plot_ok_all <- ggplot() +
+  geom_histogram(
+    aes(x = permutacion_ok),
+    fill = 'white',
+    color = 'black'
+  ) +
+  geom_vline(
+    xintercept = mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'ok']) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub']),
+    size = 1, linetype = 'dashed'
+      ) +
+  theme_classic() +
+  xlab("Diferencia de medias") + ylab('Frecuencia')
+perm_plot_ok_all
+```
+
+La diferencia de medias en la escala de FOMO entre aquellos que realizaron una estimacion correcta y aquellos que tuvieron un sesgo de subestimacion no es significativamente distinta de la esperada bajo un modelo nulo. 
+
+```{r}
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'ok'])
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub'])
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'ok']) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub'])
+quantile(permutacion_ok, c(0.025,0.975))
+```
+
+Replicamos el procedimiento anterior excluyendo aquellos sujetos con respuestas incosistentes en la autopercepcion. 
+
+```{r}
+permutacion_ok_consistente <- comparacion_permutaciones_fn(
+  h2_dataset %>% filter(sesgo != 'sobre' & error_selfperception == FALSE), 
+  'sesgo', 'fomo_puntaje'
+  )
+
+perm_plot_ok_self <- ggplot() +
+  geom_histogram(
+    aes(x = permutacion_ok_consistente),
+    fill = 'white',
+    color = 'black'
+  ) +
+  geom_vline(
+    xintercept = mean(
+      h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'ok' & h2_dataset$error_selfperception == F]) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub' & h2_dataset$error_selfperception == F]),
+    size = 1, linetype = 'dashed'
+      ) +
+  theme_classic() +
+  xlab("Diferencia de medias") + ylab('Frecuencia')
+```
+
+Las diferencias precisas fueron de
+
+```{r}
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'ok' & h2_dataset$error_selfperception == F])
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub' & h2_dataset$error_selfperception == F])
+mean(
+      h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'ok' & h2_dataset$error_selfperception == F]) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub' & h2_dataset$error_selfperception == F])
+quantile(permutacion_ok_consistente, c(0.025,0.975))
+```
+
+Por ultimo excluimos a aquellos que tuvieron una inconsistencia en la autoestimacion o la heteroestimacion
+
+```{r}
+permutacion_ok_all_consistente <- comparacion_permutaciones_fn(
+  h2_dataset %>% filter(sesgo != 'sobre' & error_selfperception == FALSE & error_otherperception == FALSE), 
+  'sesgo', 'fomo_puntaje'
+  )
+
+perm_plot_ok_none <- ggplot() +
+  geom_histogram(
+    aes(x = permutacion_ok_all_consistente),
+    fill = 'white',
+    color = 'black'
+  ) +
+  geom_vline(
+    xintercept = mean(
+      h2_dataset %>% filter(sesgo == 'ok' & error_selfperception == FALSE & error_otherperception == FALSE) %>% pull(fomo_puntaje)
+      ) - mean(
+         h2_dataset %>% filter(sesgo == 'sub' & error_selfperception == FALSE & error_otherperception == FALSE) %>% pull(fomo_puntaje)
+                                                                ),
+    size = 1, linetype = 'dashed'
+      ) +
+  theme_classic() +
+  xlab("Diferencia de medias") + ylab('Frecuencia')
+perm_plot_ok_none
 ```
 
 
-En primera medida nos interesa ver una tabla de frecuencias para ambos casos.
+Las diferencias precisas fueron de
 
 ```{r}
-h2_dataset %>% count(error_selfperception, error_otherperception)
+#Mean sobreestimacion
+mean(
+      h2_dataset %>% filter(sesgo == 'ok' & error_selfperception == FALSE & error_otherperception == FALSE) %>% pull(fomo_puntaje)
+      )
+mean(
+         h2_dataset %>% filter(sesgo == 'sub' & error_selfperception == FALSE & error_otherperception == FALSE) %>% pull(fomo_puntaje)
+                                                                )
+mean(
+      h2_dataset %>% filter(sesgo == 'ok' & error_selfperception == FALSE & error_otherperception == FALSE) %>% pull(fomo_puntaje)
+      ) - mean(
+         h2_dataset %>% filter(sesgo == 'sub' & error_selfperception == FALSE & error_otherperception == FALSE) %>% pull(fomo_puntaje)
+                                                                )
+
+quantile(permutacion_ok_all_consistente, c(0.025,0.975))
 ```
+
+Unimos todos los graficos en uno solo
+
+```{r}
+ggarrange(
+  perm_plot_ok_all, perm_plot_ok_self, perm_plot_ok_none,
+  labels = c('A', 'B', 'C'),
+  ncol = 1, nrow = 3
+)
+ggsave('test.png',
+       height = 13, width = 10, units = 'cm')
+```
+
+Ahora repetimos el procedimiento comparando los sujetos que hicieron una subestimacion con aquellos que hicieron una sobreestimacion
+
+```{r}
+permutacion_sobre_all <- comparacion_permutaciones_fn(
+  h2_dataset %>% filter(sesgo != 'ok'), 
+  'sesgo', 'fomo_puntaje'
+  )
+
+perm_plot_sobre_all <- ggplot() +
+  geom_histogram(
+    aes(x = permutacion_sobre_all),
+    fill = 'white',
+    color = 'black'
+  ) +
+  geom_vline(
+    xintercept = mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre']) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub']),
+    size = 1, linetype = 'dashed'
+      ) +
+  theme_classic() +
+  xlab("Diferencia de medias") + ylab('Frecuencia')
+perm_plot_sobre_all
+```
+
+La diferencia pareceria ser significativa, para darnos una idea mas formal calculamos el intervalo del 95% sobre la distribucion de diferencias calculada con permutaciones.
+
+```{r}
+#Media de los sujetos que sobreestimaron
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre'])
+#Media de los sujetos que subestimaron
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub'])
+#Diferencia de medias
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre']) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub'])
+sum(
+  abs(permutacion_sobre_all) >= abs(mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre']) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub'])))/10000
+quantile(permutacion_sobre_all, c(0.025,0.975))
+cohens_d(fomo_puntaje ~ sesgo, data = h2_dataset %>% filter(sesgo != 'ok'), pooled_sd = F)
+```
+
+Vemos que la diferencia de `r mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre']) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub'])` esta por encima de este intervalo lo que seria equivalente a un nivel de significancia de 0.05
+
+Repetimos el procedimiento de permutaciones con excluyendo sujetos igual que se hizo anteriormente
+
+```{r}
+permutacion_sobre_consistente <-  comparacion_permutaciones_fn(
+  h2_dataset %>% filter(sesgo != 'ok' & error_selfperception == FALSE), 
+  'sesgo', 'fomo_puntaje'
+  )
+
+permutacion_sobre_all_consistente <-  comparacion_permutaciones_fn(
+  h2_dataset %>% filter(sesgo != 'ok' & error_selfperception == FALSE & error_otherperception == FALSE), 
+  'sesgo', 'fomo_puntaje'
+  )
+
+perm_plot_sobre_self <- ggplot() +
+  geom_histogram(
+    aes(x = permutacion_sobre_consistente),
+    fill = 'white',
+    color = 'black'
+  ) +
+  geom_vline(
+    xintercept = mean(
+      h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre' & h2_dataset$error_selfperception == F]
+      ) - mean(
+        h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub' & h2_dataset$error_selfperception == F]
+        ),
+    size = 1, linetype = 'dashed'
+      ) +
+  theme_classic() +
+  xlab("Diferencia de medias") + ylab('Frecuencia')
+perm_plot_sobre_self
+
+perm_plot_sobre_none <- ggplot() +
+  geom_histogram(
+    aes(x = permutacion_sobre_all_consistente),
+    fill = 'white',
+    color = 'black'
+  ) +
+  geom_vline(
+    xintercept = mean(
+      h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre' & h2_dataset$error_selfperception == F]
+      ) - mean(
+        h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub' & h2_dataset$error_selfperception == F]
+        ),
+    size = 1, linetype = 'dashed'
+      ) +
+  theme_classic() +
+  xlab("Diferencia de medias") + ylab('Frecuencia')
+perm_plot_sobre_none
+```
+
+El resultado es aparente unicamente en el caso con todos los sujetos pero desaparece cuando excluimos a cualquiera de los dos grupos.
+
+Por ultimo realizamos un modelo logistico utilizando la sobreestimacion y la subestimacion como categorias binarias a predecir utilizando los puntajes en la escala de FOMO.
+
+```{r}
+glm(
+  sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(sesgo != 'ok') %>% mutate(sesgo = ifelse(sesgo == 'sub', 1, 0))
+) %>% summary()
+```
+
+El coeficiente relativo al puntaje en la escala de FOMO es significativo y negativo lo cual significa que un incremente en el puntaje en la escala de FOMO esta asociado a una menor probabilidad de pertenecer al grupo categorizado como 1 que es el grupo de subestimacion, en concordancia con los resultados anteriores. 
+
+Repetimos el modelo con los mismos criterios de exclusion que antes.
+
+```{r}
+glm(
+  sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(sesgo != 'ok' & error_selfperception == F) %>% mutate(sesgo = ifelse(sesgo == 'sub', 1, 0))
+) %>% summary()
+
+glm(
+  sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(sesgo != 'ok' & error_selfperception == F & error_otherperception == F) %>% mutate(sesgo = ifelse(sesgo == 'sub', 1, 0))
+) %>% summary()
+```
+
+Podemos ahora comparar el desempeño del modelo con todos los sujetos contra un modelo nulo
+
+```{r}
+performance::compare_performance(
+  glm(
+  sesgo ~ 1, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(sesgo != 'ok') %>% mutate(sesgo = ifelse(sesgo == 'sub', 1, 0))
+  ),
+glm(
+  sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(sesgo != 'ok') %>% mutate(sesgo = ifelse(sesgo == 'sub', 1, 0))
+  ) 
+)
+```
+El modelo es marginalmente mejor que un modelo nulo.
+
+En definitiva con toda la evidencia recabada decimos que no hay suficiente evidencia para apoyar una diferencia en los puntajes en la escala de FOMO dado por errores de estimacion en el propio uso a partir de la respuesta categorica. 
+
+
+```{r}
+h2_dataset$selfperception_catnum <- fct_recode(h2_dataset$selfperception_cat,
+           '6' = 'Más de 3 hs por día', 
+           '5' = '2-3 hs por día', 
+            '4' = '1-2 hs por día',
+            '3' = '31-60 min por día',
+            '2' = '10-30 min por día',
+            '1' = 'Menos de 10 min por día')
+h2_dataset$otherperception_catnum <- fct_recode(h2_dataset$otherperception_cat,
+           '6' = 'Más de 3 hs por día', 
+           '5' = '2-3 hs por día', 
+            '4' = '1-2 hs por día',
+            '3' = '31-60 min por día',
+            '2' = '10-30 min por día',
+            '1' = 'Menos de 10 min por día')
+
+h2_dataset <- h2_dataset %>% ungroup() %>%
+  mutate(
+    selfperception_catnum = as.integer(selfperception_catnum),
+    otherperception_catnum = as.integer(otherperception_catnum),
+    sesgo2 = ifelse(selfperception_catnum == otherperception_catnum, 'same',
+                    ifelse(selfperception_catnum > otherperception_catnum, 'over', 'under')
+                    )
+  )
+```
+
+
+```{r}
+h2_dataset %>%
+  ggplot(
+    aes(x = sesgo2, y = fomo_puntaje)
+  ) + 
+  geom_violin()
+```
+
+
+
+
+
+```{r}
+h2_dataset %>%  %>%
+  mutate(
+    autopercepcion = selfperception_num - uso_screnshot
+  )
+```
+
+
 
 Ahora que tenemos ese dato podemos repetir algunos analisis y hacer otros nuevos contemplando esto como dato a marcar.
 
@@ -466,3 +680,20 @@ boot.ci(boot_test, conf = .99)
 plot(boot_test)
 ```
 
+
+
+En primer lugar vemos la frecuencia de cada ocurrencia. 
+
+```{r}
+h2_dataset %>% ungroup() %>%
+  count(sesgo) %>% 
+  mutate(
+    freq_r = n/sum(n)
+    ) %>%
+  ggplot(aes(x = sesgo, y = freq_r)) +
+  geom_col(aes(fill = sesgo)) +
+  geom_label(aes(label = n)) +
+  theme_classic() +
+  ylab('Frecuencia relativa') + xlab('Tipo de Estimacion') +
+  scale_fill_discrete('Estimacion', labels = c("Correcta", 'Sobreestimacion', 'Subestimacion'))
+```

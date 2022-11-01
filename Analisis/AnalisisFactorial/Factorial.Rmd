@@ -23,7 +23,7 @@ spam <- rbind(
 ) %>%
   drop_na(everything())
 
-spam <- dataset_combinado_prepro %>% 
+spam <- final_dataset %>% 
   select(A1:P3) %>%
   drop_na()
 ```
@@ -400,5 +400,17 @@ plot(captca, "screeplot")
 
 ```{r}
 plot(captca$objectscores, xlab = "dim1", ylab = "dim2", col = "RED", cex = .5)
+```
+
+
+
+```{r}
+lm(
+  fomo ~ dim1, data = data.frame(fomo = final_dataset$fomo_puntaje, dim1 = captca$objectscores[,1], dim2 = captca$objectscores[,2])
+) %>% performance::model_performance()
+```
+
+```{r}
+hist(h2_dataset$fomo_puntaje)
 ```
 
