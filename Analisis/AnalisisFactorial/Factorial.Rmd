@@ -6,7 +6,6 @@ output: html_notebook
 ```{r}
 library(Hmisc)
 library(tidyverse)
-library(corrplot)
 library(GGally)
 library(boot)
 library(psych)
@@ -15,41 +14,52 @@ library(ggridges)
 
 
 ```{r}
-spam <- rbind(
- read_csv('../../Datos/DatosReales/EXCEL (respuestas) - Respuestas de formulario 1.csv') %>% 
-  select(starts_with('Por favor, indicá')),
- read_csv('../../Datos/DatosReales/EXCEL PRIMER FORMULARIO - 01 Percepciones del uso, FOMO y tiempo de uso real de Instagram en jóvenes argentinos.csv') %>%
-   select(starts_with('Por favor, indicá'))
-) %>%
-  drop_na(everything())
+load("../../Pre-procesamiento/dataset_final.rda")
 
 spam <- final_dataset %>% 
   select(A1:P3) %>%
   drop_na()
+spam_filtrado <- final_dataset %>% 
+  filter(error_otherperception == F & error_selfperception == F) %>%
+  select(A1:P3) %>%
+  drop_na()
 ```
 
-# Visualizacion multivariada
-
-El objetivo de esta visualizacion es ver, al mismo tiempo, la distribucion de cada variable y la relacion bivariada para examinar patrones no monotonicos.
-
-```{r}
-ggpairs(spam,
-upper = list(continuous = "density", combo = "box_no_facet"),
-lower = list(continuous = wrap("points", position=position_jitter(height= .3, width=.3)), combo = "dot_no_facet"))
-```
 
 Para ver mejor la distribucion de cada variable vamos a utilizar un grafico de ridge lines. 
 
 ```{r}
-spam %>% pivot_longer(cols = everything(), names_to = 'Var', values_to = 'Res') %>%
+distribucion_todos <- spam %>% pivot_longer(cols = everything(), names_to = 'Var', values_to = 'Res') %>%
   ggplot(
     aes(x = Res, y = Var, fill = Res)
   ) +
-  geom_density_ridges(
-    )
+  geom_density_ridges(bandwidth = 0.7, fill = 'lightblue' 
+    ) + 
+  xlab('Respuesta') + ylab('Variable') +
+  theme_classic()
+distribucion_todos
 ```
 
-El supuesto de distribucion normal necesario para realizar correlaciones policloricas pareceria no estar justificado. 
+Replicamos el grafico con los datos filtrados
+
+```{r}
+distribucion_filtrado <- spam_filtrado %>% pivot_longer(cols = everything(), names_to = 'Var', values_to = 'Res') %>%
+  ggplot(
+    aes(x = Res, y = Var, fill = Res)
+  ) +
+  geom_density_ridges(bandwidth = 0.7, fill = 'lightblue'
+    ) + 
+  xlab('Respuesta') + ylab('Variable') +
+  theme_classic()
+distribucion_filtrado
+```
+
+Las distribuciones son practicamente las mismas. De hecho podemos combinarlas a ambas en un mismo grafico. 
+
+```{r}
+ggpubr::ggarrange(distribucion_todos, distribucion_filtrado, nrow = 1, ncol = 2, labels = c('A','B'))
+ggsave('uso_dist.png')
+```
 
 
 # Reduccion de la dimensionalidad heuristica
@@ -57,7 +67,24 @@ El supuesto de distribucion normal necesario para realizar correlaciones policlo
 Lo primero que podemos hacer es promediar aquellas variables que creemos que pertenecen a la misma categoria, es decir todas aquellas que son de uso activo y todas aquellas que son de uso pasivo.
 
 ```{r}
-resumen_actividad <- spam %>% 
+resumen_actividad_todos <- spam %>% 
+  rowwise() %>%
+  transmute(
+    media_activo = mean(
+      c(A1,A2,A3,A4)
+      ),
+    media_pasivo = mean(
+      c(P1,P2,P3)
+    ),
+    mediana_activo = median(
+      c(A1,A2,A3,A4)
+    ),
+    mediana_pasivo = median(
+      c(P1,P2,P3)
+    )
+  )
+
+resumen_actividad_filtrado <- spam_filtrado %>% 
   rowwise() %>%
   transmute(
     media_activo = mean(
@@ -78,39 +105,58 @@ resumen_actividad <- spam %>%
 Podemos graficar ahora la relacion entre la media del uso activo y el uso pasivo. Si no hay relacion entre ambas esperariamos ver que no hay ningun tipo de ajuste posibles decir una nube de puntos difusa.
 
 ```{r}
-ggplot(
-  resumen_actividad,
+scatter_all <- ggplot(
+  resumen_actividad_todos,
   aes(x = media_activo, y = media_pasivo)
 ) +
   geom_jitter(width = 0.025) + 
-  geom_smooth(se = F) + geom_smooth(method = 'lm', color = 'red', se = F) +
-  geom_density_2d(color = 'grey') +
-  theme_classic()
+  geom_smooth(se = F, linetype = 'dashed') + geom_smooth(method = 'lm', color = 'red', se = F) +
+  theme_classic() + xlab("Media de uso activo") + ylab("Media de uso pasivo")
+scatter_all
 ```
 
 Se ve una clara relacion entre ambas variables la cual incluso podria ser no lineal teniendo la forma de un polinomio cubico. 
 
-Lo mismo podemos graficar usando la mediana en lugar de la media
+Repetimos el grafico empleando unicamente los datos filtrados
 
 ```{r}
-ggplot(
-  resumen_actividad,
-  aes(x = mediana_activo, y = mediana_pasivo)
+scatter_consistent <- ggplot(
+  resumen_actividad_filtrado,
+  aes(x = media_activo, y = media_pasivo)
 ) +
   geom_jitter(width = 0.025) + 
-  geom_smooth(se = F) + geom_smooth(method = 'lm', color = 'red', se = F) +
-  geom_density_2d(color = 'grey') +
-  theme_classic()
+  geom_smooth(se = F, linetype = 'dashed') + geom_smooth(method = 'lm', color = 'red', se = F) +
+  theme_classic() + xlab("Media de uso activo") + ylab("Media de uso pasivo")
+scatter_consistent
 ```
 
-De nuevo la relacion esta lejos de ser igual a cero. De base esto nos lleva a pensar que, aun si estas preguntas miden lo que nos proponemos medir, el uso activo y pasivo no estan disociados el uno del otro. 
+Sigue habiendo una fuerte relacion lineal.
+
+```{r}
+ggpubr::ggarrange(
+  scatter_all, scatter_consistent
+)
+ggsave("scatter_uso.png")
+```
+
 
 # Correlaciones
 
+```{r}
+library(corrplot)
+```
+
 ## Spearman
 
+
 ```{r}
-cor(spam, method = 'spearman') %>% corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+corrplot(cor(spam, method = 'spearman'), method = 'ellipse', type = 'upper', addCoef.col = 'black')
+```
+
+
+```{r}
+corrplot(cor(spam_filtrado, method = 'spearman'), method = 'ellipse', type = 'upper', addCoef.col = 'black')
+title(main = 'Filtrados', line = 2)
 ```
 
 ## Kendall
@@ -118,6 +164,13 @@ cor(spam, method = 'spearman') %>% corrplot(method = 'ellipse', type = 'upper', 
 ```{r}
 cor(spam, method = 'kendall') %>% corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
 ```
+
+
+```{r}
+cor(spam_filtrado, method = 'kendall') %>% corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+```
+
+
 ## Policlorica
 
 ```{r}
@@ -125,7 +178,10 @@ polychoric(x = spam)$rho %>%
   corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
 ```
 
-
+```{r}
+polychoric(x = spam_filtrado)$rho %>%
+  corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+```
 
 ## Gamma
 
@@ -136,7 +192,7 @@ Por ultimo le agregamos los nombres de las columnas y las filas.
 gamma_matrix <- expand.grid(colnames(spam), colnames(spam)) %>% tibble() %>%
   rowwise() %>%
   mutate(
-    correlacion = rcorr.cens(spam[[Var1]], spam[[Var2]], outx = TRUE)['Dxy']
+    correlacion = Hmisc::rcorr.cens(spam[[Var1]], spam[[Var2]], outx = TRUE)['Dxy']
   ) %>% 
   pull(correlacion) %>%
   matrix(nrow = ncol(spam), ncol = ncol(spam))
@@ -150,6 +206,41 @@ Ahora si podemos proceder a graficar el resultado.
 gamma_matrix %>% 
   corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
 ```
+
+```{r}
+gamma_matrix_filtrado <- expand.grid(colnames(spam_filtrado), colnames(spam_filtrado)) %>% tibble() %>%
+  rowwise() %>%
+  mutate(
+    correlacion = Hmisc::rcorr.cens(spam_filtrado[[Var1]], spam_filtrado[[Var2]], outx = TRUE)['Dxy']
+  ) %>% 
+  pull(correlacion) %>%
+  matrix(nrow = ncol(spam_filtrado), ncol = ncol(spam_filtrado))
+colnames(gamma_matrix) <- colnames(spam_filtrado)
+rownames(gamma_matrix) <- colnames(spam_filtrado)
+gamma_matrix_filtrado %>% 
+corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+```
+
+## Uniones Graficos
+
+
+```{r}
+par(mfrow = c(1,2))
+corrplot(cor(spam, method = 'spearman'), method = 'ellipse', type = 'upper', addCoef.col = 'black')
+corrplot(cor(spam_filtrado, method = 'spearman'), method = 'ellipse', type = 'upper', addCoef.col = 'black')
+cor(spam, method = 'kendall') %>% corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+cor(spam_filtrado, method = 'kendall') %>% corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+polychoric(x = spam)$rho %>%
+  corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+polychoric(x = spam_filtrado)$rho %>%
+  corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+gamma_matrix %>% 
+  corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+gamma_matrix_filtrado %>% 
+  corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+```
+
+
 
 # Correlaciones con intervalos
 
@@ -328,6 +419,47 @@ cor_df_combinado %>%
   scale_x_continuous(limits = c(0,1))
 ```
 
+# CFA
+
+```{r}
+library(lavaan)
+```
+
+Primero corremos el modelo usando la totalidad de los datos
+
+```{r}
+cfa_ActivoPasivo <- "activo =~ A1 + A2 + A3 + A4
+pasivo =~ P1 + P2 + P3"
+cfa_Generico <- 'uso =~ A1 + A2 + A3 + A4 + P1 + P2 + P3'
+cfa_model <- cfa(cfa_ActivoPasivo, data = spam, mimic =c("MPlus"), std.lv = TRUE, ordered = TRUE)
+fitMeasures(cfa_model, c("chisq.scaled", "df", "pvalue.scaled"))
+fitMeasures(cfa_model, c("rmsea.scaled", "rmsea.ci.lower.scaled", "rmsea.ci.upper.scaled", "rmsea.pvalue.scaled"))
+fitMeasures(cfa_model, c("cfi.scaled", "srmr"))
+```
+
+
+```{r}
+performance::model_performance(cfa(cfa_ActivoPasivo, data = spam_filtrado))
+residuals(cfa_model)$cov
+```
+
+
+```{r}
+parameterEstimates(cfa_model, standardized=TRUE) %>% 
+  filter(op == "=~") %>% 
+  select(Item=rhs, Standardized=est, ci.lower, ci.upper, SE=se, Z=z, 'p-value'=pvalue)
+```
+
+
+```{r}
+parameterEstimates(cfa_model, standardized=TRUE, rsquare = TRUE) %>% 
+  filter(op == "r2") %>% 
+  select(Item=rhs, R2 = est) 
+```
+
+
+
+
 # PCA
 
 ## Policorica
@@ -354,6 +486,7 @@ ggplot(
 El primer componente explica el `r round(poly_pca$Vaccounted[2,1] * 100, 2)`% de la varianza y el segundo componente explica el `r round(poly_pca$Vaccounted[2,2] * 100, 2)`% de la varianza. 
 
 ```{r}
+plot(poly_pca)
 fa.parallel(spam %>% as.data.frame(), fm = 'pa', fa = 'pa', cor = 'poly')
 ```
 
@@ -377,7 +510,8 @@ spam_ordinal <- spam %>% mutate(
 
 
 ```{r}
-captca <- princals(spam_ordinal, degrees = 3)
+captca <- princals(spam_ordinal)
+captca$evals
 ```
 
 Podemos graficar la transformacion realizada a las variables originales. 
@@ -400,17 +534,5 @@ plot(captca, "screeplot")
 
 ```{r}
 plot(captca$objectscores, xlab = "dim1", ylab = "dim2", col = "RED", cex = .5)
-```
-
-
-
-```{r}
-lm(
-  fomo ~ dim1, data = data.frame(fomo = final_dataset$fomo_puntaje, dim1 = captca$objectscores[,1], dim2 = captca$objectscores[,2])
-) %>% performance::model_performance()
-```
-
-```{r}
-hist(h2_dataset$fomo_puntaje)
 ```
 
