@@ -1,0 +1,1192 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ggpubr)
+library(effectsize)
+load('../Pre-procesamiento/dataset_final.rda')
+```
+
+Creamos el nuevo dataset para este analisis eliminando aquellos usuarios que no reportaron horas reales de uso de instagram.
+
+```{r}
+h2_dataset <- final_dataset %>%
+  drop_na(uso_screnshot)
+```
+
+Posteriormente calculamos si la categoria que asignaron segun su autopercepcion coincide con las horas reales de uso de instagram. Para eso utilizamos una lookup table.
+
+```{r}
+lookup_table <- data.frame(
+  categoria = c('Más de 3 hs por día', '2-3 hs por día', '1-2 hs por día', '31-60 min por día', '10-30 min por día', 'Menos de 10 min por día'),
+  uper_bound = c(Inf, 10800, 7200, 3600, 1800, 600),
+  lower_bound = c(10800, 7200, 3600, 1860, 600, -Inf)
+)
+
+
+sesgo_estimacion_fun <- function(cat_value, num_value){
+  acierto <- ifelse(
+    between(num_value, lookup_table[lookup_table$categoria == cat_value, 3], lookup_table[lookup_table$categoria == cat_value, 2]), 'ok', F
+    )
+  if(acierto == F){
+    if(
+      num_value > lookup_table[lookup_table$categoria == cat_value, 2] #Si el valor esta por encima del umbral superior
+    ){
+      return('sub')
+    }else{
+      return('sobre')
+    }
+  }else{
+    return(acierto)
+  }
+}
+```
+
+Utilizando los objetos creados anteriormente calculamos para cada sujeto si subestimo, sobreestimo o tuvo una estimacion correcta.
+
+```{r}
+h2_dataset <- h2_dataset %>% 
+  rowwise() %>%
+  mutate(
+  sesgo = sesgo_estimacion_fun(selfperception_cat, uso_screnshot)
+  ) %>%
+  ungroup()
+```
+
+Para responder a la segunda hipotesis vemos los puntajes en la escala de FOMO para los distintos tipos de respuesta.
+
+```{r}
+violin_fomo_sesgo_plot_all <- h2_dataset %>%
+  ggplot(aes(x = sesgo, y = fomo_puntaje, fill = sesgo)) +
+  geom_violin(alpha = 0.75, trim = F) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2)) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2), geom = 'errorbar', width = 0.1) +
+  ylab('FOMO') + xlab('Tipo de respuesta') +
+  scale_fill_discrete('Tipo de respuesta', labels = c('Correcta', 'Sobreestimacion', 'Subestimacion')) +
+  scale_x_discrete(
+    labels=c("ok" = "Correcta", "sobre" = "Sobreestimacion",
+                              "sub" = "Subestimacion"),
+    limits = c('sub', 'ok', 'sobre')
+  ) +
+  theme_classic()
+violin_fomo_sesgo_plot_all
+```
+
+Repetimos el mismo grafico pero esta vez excluimos aquellos sujetos cuya respuesta categorica no es consistente con su respuesta numerica.
+
+```{r}
+violin_fomo_sesgo_plot_self <- h2_dataset %>% filter(error_selfperception == FALSE) %>%
+  ggplot(aes(x = sesgo, y = fomo_puntaje, fill = sesgo)) +
+  geom_violin(alpha = 0.75, trim = F) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2)) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2), geom = 'errorbar', width = 0.1) +
+  ylab('FOMO') + xlab('Tipo de respuesta') +
+  scale_fill_discrete('Tipo de respuesta', labels = c('Correcta', 'Sobreestimacion', 'Subestimacion')) +
+  scale_x_discrete(
+    labels=c("ok" = "Correcta", "sobre" = "Sobreestimacion",
+                              "sub" = "Subestimacion"),
+    limits = c('sub', 'ok', 'sobre')
+  ) +
+  theme_classic()
+violin_fomo_sesgo_plot_self
+```
+
+De nuevo repetimos el mismo grafico pero excluyendo a todos los sujetos, quienes respondieron incosistentemente a cualquiera de las dos categorias
+
+```{r}
+violin_fomo_sesgo_plot_none <- h2_dataset %>% 
+  filter(error_selfperception == FALSE & error_otherperception == FALSE) %>%
+  ggplot(aes(x = sesgo, y = fomo_puntaje, fill = sesgo)) +
+  geom_violin(alpha = 0.75, trim = F) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2)) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2), geom = 'errorbar', width = 0.1) +
+  ylab('FOMO') + xlab('Tipo de respuesta') +
+  scale_fill_discrete('Tipo de respuesta', labels = c('Correcta', 'Sobreestimacion', 'Subestimacion')) +
+  scale_x_discrete(
+    labels=c("ok" = "Correcta", "sobre" = "Sobreestimacion",
+                              "sub" = "Subestimacion"),
+    limits = c('sub', 'ok', 'sobre')
+  ) +
+  theme_classic()
+violin_fomo_sesgo_plot_none
+```
+
+Combinamos todos los graficos en uno solo
+
+```{r}
+ggarrange(
+  violin_fomo_sesgo_plot_all, violin_fomo_sesgo_plot_self, violin_fomo_sesgo_plot_none,
+  labels = c('A', 'B', 'C'),
+  ncol = 1, nrow = 3
+)
+ggsave('test.png',
+       width = 15, height = 25, units = "cm")
+```
+
+Para hacer las comparaciones generamos un codigo que nos permita realizar permutaciones. La funcion toma simplemente un vector con dos categorias y un vector numerico con la variable de respuesta de interes. 
+
+```{r}
+permutaciones_mean <- function(categoria, respuesta){
+  shuffle_categoria <- sample(categoria, length(categoria))
+  
+  shuffle_df <- tibble(
+    shuf_cat = shuffle_categoria,
+    resp = respuesta
+  )
+  
+  shuffle_df %>%
+  group_by(shuf_cat) %>% summarise(x = mean(resp)) %>% summarise(x = diff(x)) %>% pull(x)
+}
+```
+
+Siendo que vamos a usar esto varias veces lo empaquetamos en una funcion. La funcion toma como argumentos un dataframe, una string con el nombre de la columna con la categoria (binaria) y una string con el nombre de la variable de respuesta que nos interesa. Devuelve como resultado un vector de permutaciones.
+
+```{r}
+comparacion_permutaciones_fn <- function(dataset, nombre_categoria, nombre_respuesta){
+  res_perm <- replicate(
+  10000,
+  permutaciones_mean(
+    dataset[[nombre_categoria]],
+    dataset[[nombre_respuesta]]
+    )
+  )
+  return(res_perm)
+}
+```
+
+Lo aplicamos primero comparando con la categoria de estimacion correcta para todos los sujetos usando 10 mil permutaciones.
+
+```{r}
+permutacion_ok <- comparacion_permutaciones_fn(h2_dataset %>% filter(sesgo != 'sobre'), 'sesgo', 'fomo_puntaje')
+```
+
+Graficamos el histograma de la distribucion de diferencias bajo la hipotesis nula.
+
+```{r}
+perm_plot_ok_all <- ggplot() +
+  geom_histogram(
+    aes(x = permutacion_ok),
+    fill = 'white',
+    color = 'black'
+  ) +
+  geom_vline(
+    xintercept = mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'ok']) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub']),
+    size = 1, linetype = 'dashed'
+      ) +
+  theme_classic() +
+  xlab("Diferencia de medias") + ylab('Frecuencia')
+perm_plot_ok_all
+```
+
+La diferencia de medias en la escala de FOMO entre aquellos que realizaron una estimacion correcta y aquellos que tuvieron un sesgo de subestimacion no es significativamente distinta de la esperada bajo un modelo nulo. 
+
+```{r}
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'ok'])
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub'])
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'ok']) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub'])
+quantile(permutacion_ok, c(0.025,0.975))
+```
+
+Replicamos el procedimiento anterior excluyendo aquellos sujetos con respuestas incosistentes en la autopercepcion. 
+
+```{r}
+permutacion_ok_consistente <- comparacion_permutaciones_fn(
+  h2_dataset %>% filter(sesgo != 'sobre' & error_selfperception == FALSE), 
+  'sesgo', 'fomo_puntaje'
+  )
+
+perm_plot_ok_self <- ggplot() +
+  geom_histogram(
+    aes(x = permutacion_ok_consistente),
+    fill = 'white',
+    color = 'black'
+  ) +
+  geom_vline(
+    xintercept = mean(
+      h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'ok' & h2_dataset$error_selfperception == F]) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub' & h2_dataset$error_selfperception == F]),
+    size = 1, linetype = 'dashed'
+      ) +
+  theme_classic() +
+  xlab("Diferencia de medias") + ylab('Frecuencia')
+```
+
+Las diferencias precisas fueron de
+
+```{r}
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'ok' & h2_dataset$error_selfperception == F])
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub' & h2_dataset$error_selfperception == F])
+mean(
+      h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'ok' & h2_dataset$error_selfperception == F]) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub' & h2_dataset$error_selfperception == F])
+quantile(permutacion_ok_consistente, c(0.025,0.975))
+```
+
+Por ultimo excluimos a aquellos que tuvieron una inconsistencia en la autoestimacion o la heteroestimacion
+
+```{r}
+permutacion_ok_all_consistente <- comparacion_permutaciones_fn(
+  h2_dataset %>% filter(sesgo != 'sobre' & error_selfperception == FALSE & error_otherperception == FALSE), 
+  'sesgo', 'fomo_puntaje'
+  )
+
+perm_plot_ok_none <- ggplot() +
+  geom_histogram(
+    aes(x = permutacion_ok_all_consistente),
+    fill = 'white',
+    color = 'black'
+  ) +
+  geom_vline(
+    xintercept = mean(
+      h2_dataset %>% filter(sesgo == 'ok' & error_selfperception == FALSE & error_otherperception == FALSE) %>% pull(fomo_puntaje)
+      ) - mean(
+         h2_dataset %>% filter(sesgo == 'sub' & error_selfperception == FALSE & error_otherperception == FALSE) %>% pull(fomo_puntaje)
+                                                                ),
+    size = 1, linetype = 'dashed'
+      ) +
+  theme_classic() +
+  xlab("Diferencia de medias") + ylab('Frecuencia')
+perm_plot_ok_none
+```
+
+
+Las diferencias precisas fueron de
+
+```{r}
+#Mean sobreestimacion
+mean(
+      h2_dataset %>% filter(sesgo == 'ok' & error_selfperception == FALSE & error_otherperception == FALSE) %>% pull(fomo_puntaje)
+      )
+mean(
+         h2_dataset %>% filter(sesgo == 'sub' & error_selfperception == FALSE & error_otherperception == FALSE) %>% pull(fomo_puntaje)
+                                                                )
+mean(
+      h2_dataset %>% filter(sesgo == 'ok' & error_selfperception == FALSE & error_otherperception == FALSE) %>% pull(fomo_puntaje)
+      ) - mean(
+         h2_dataset %>% filter(sesgo == 'sub' & error_selfperception == FALSE & error_otherperception == FALSE) %>% pull(fomo_puntaje)
+                                                                )
+
+quantile(permutacion_ok_all_consistente, c(0.025,0.975))
+```
+
+Unimos todos los graficos en uno solo
+
+```{r}
+ggarrange(
+  perm_plot_ok_all, perm_plot_ok_self, perm_plot_ok_none,
+  labels = c('A', 'B', 'C'),
+  ncol = 1, nrow = 3
+)
+ggsave('test.png',
+       height = 13, width = 10, units = 'cm')
+```
+
+Ahora repetimos el procedimiento comparando los sujetos que hicieron una subestimacion con aquellos que hicieron una sobreestimacion
+
+```{r}
+permutacion_sobre_all <- comparacion_permutaciones_fn(
+  h2_dataset %>% filter(sesgo != 'ok'), 
+  'sesgo', 'fomo_puntaje'
+  )
+
+perm_plot_sobre_all <- ggplot() +
+  geom_histogram(
+    aes(x = permutacion_sobre_all),
+    fill = 'white',
+    color = 'black'
+  ) +
+  geom_vline(
+    xintercept = mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre']) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub']),
+    size = 1, linetype = 'dashed'
+      ) +
+  theme_classic() +
+  xlab("Diferencia de medias") + ylab('Frecuencia')
+perm_plot_sobre_all
+```
+
+La diferencia pareceria ser significativa, para darnos una idea mas formal calculamos el intervalo del 95% sobre la distribucion de diferencias calculada con permutaciones.
+
+```{r}
+#Media de los sujetos que sobreestimaron
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre'])
+#Media de los sujetos que subestimaron
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub'])
+#Diferencia de medias
+mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre']) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub'])
+sum(
+  abs(permutacion_sobre_all) >= abs(mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre']) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub'])))/10000
+quantile(permutacion_sobre_all, c(0.025,0.975))
+cohens_d(fomo_puntaje ~ sesgo, data = h2_dataset %>% filter(sesgo != 'ok'), pooled_sd = F)
+```
+
+Vemos que la diferencia de `r mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre']) - mean(h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub'])` esta por encima de este intervalo lo que seria equivalente a un nivel de significancia de 0.05
+
+Repetimos el procedimiento de permutaciones excluyendo sujetos igual que se hizo anteriormente
+
+En primer lugar excluimos unicamente aquellos que tuvieron una inconsistencia en la pregunta sobre el uso propio sin importar la respuesta en el uso ajeno.
+
+```{r}
+permutacion_sobre_consistente <-  comparacion_permutaciones_fn(
+  h2_dataset %>% filter(sesgo != 'ok' & error_selfperception == FALSE), 
+  'sesgo', 'fomo_puntaje'
+  )
+
+perm_plot_sobre_self <- ggplot() +
+  geom_histogram(
+    aes(x = permutacion_sobre_consistente),
+    fill = 'white',
+    color = 'black'
+  ) +
+  geom_vline(
+    xintercept = mean(
+      h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre' & h2_dataset$error_selfperception == F]
+      ) - mean(
+        h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub' & h2_dataset$error_selfperception == F]
+        ),
+    size = 1, linetype = 'dashed'
+      ) +
+  theme_classic() +
+  xlab("Diferencia de medias") + ylab('Frecuencia')
+perm_plot_sobre_self
+```
+Ya con el grafico la diferencia pareceria dejar de haber sido consistente. Para ver mas a fondo calculamos el intervalo del 95% sobre la distribucion de permutaciones y calculamos la diferencia de medias. 
+
+```{r}
+h2_dataset %>% filter(sesgo != 'ok' & error_selfperception == FALSE) %>% group_by(sesgo) %>% summarise(media = mean(fomo_puntaje)) %>% pull(media) %>% diff()
+quantile(permutacion_sobre_consistente, c(0.025,0.975))
+```
+
+La diferencia deja de ser significativa. Podemos evaluar que ocurre ahora cuando excluimos a todos los sujetos con al menos una respuesta inconsistente en cualquiera de las dos preguntas. 
+
+
+```{r}
+permutacion_sobre_all_consistente <-  comparacion_permutaciones_fn(
+  h2_dataset %>% filter(sesgo != 'ok' & error_selfperception == FALSE & error_otherperception == FALSE), 
+  'sesgo', 'fomo_puntaje'
+  )
+
+perm_plot_sobre_none <- ggplot() +
+  geom_histogram(
+    aes(x = permutacion_sobre_all_consistente),
+    fill = 'white',
+    color = 'black'
+  ) +
+  geom_vline(
+    xintercept = mean(
+      h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sobre' & h2_dataset$error_selfperception == F]
+      ) - mean(
+        h2_dataset$fomo_puntaje[h2_dataset$sesgo == 'sub' & h2_dataset$error_selfperception == F]
+        ),
+    size = 1, linetype = 'dashed'
+      ) +
+  theme_classic() +
+  xlab("Diferencia de medias") + ylab('Frecuencia')
+perm_plot_sobre_none
+```
+
+```{r}
+h2_dataset %>% filter(sesgo != 'ok' & error_selfperception == FALSE & error_otherperception == FALSE) %>% 
+  group_by(sesgo) %>% summarise(media = mean(fomo_puntaje)) %>% pull(media) %>% diff()
+quantile(permutacion_sobre_all_consistente, c(0.025,0.975))
+```
+
+El resultado es aparente unicamente en el caso con todos los sujetos pero desaparece cuando excluimos a cualquiera de los dos grupos.
+
+Por ultimo realizamos un modelo logistico. Primero comparando la estimacion correcta con la subestimacion. 
+
+```{r}
+glm(
+  sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(sesgo != 'sobre') %>% mutate(sesgo = ifelse(sesgo == 'sub', 1, 0))
+) %>% summary()
+```
+
+Repetimos excluyendo los que tienen una sola inconsistencia
+
+```{r}
+glm(
+  sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(sesgo != 'sobre' & error_selfperception == F) %>% mutate(sesgo = ifelse(sesgo == 'sub', 1, 0))
+) %>% summary()
+```
+
+Con dos inconsistencias
+
+```{r}
+glm(
+  sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(sesgo != 'sobre' & error_selfperception == F & error_otherperception == F) %>% mutate(sesgo = ifelse(sesgo == 'sub', 1, 0))
+) %>% summary()
+```
+
+Utilizando la sobreestimacion y la subestimacion como categorias binarias a predecir utilizando los puntajes en la escala de FOMO.
+
+```{r}
+glm(
+  sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(sesgo != 'ok') %>% mutate(sesgo = ifelse(sesgo == 'sub', 1, 0))
+) %>% summary()
+```
+
+Calculamos el odds ratio del predictor de interes
+
+```{r}
+glm(
+  sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(sesgo != 'ok') %>% mutate(sesgo = ifelse(sesgo == 'sub', 1, 0))
+) %>% coefficients() %>% exp()
+```
+
+Calculamos el intervalo de confianza del 95%
+
+```{r}
+confint.default(
+  glm(
+  sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(sesgo != 'ok') %>% mutate(sesgo = ifelse(sesgo == 'sub', 1, 0))
+  )
+) %>% exp()
+```
+
+El coeficiente relativo al puntaje en la escala de FOMO es significativo y negativo lo cual significa que un incremente en el puntaje en la escala de FOMO esta asociado a una menor probabilidad de pertenecer al grupo categorizado como 1 que es el grupo de subestimacion, en concordancia con los resultados anteriores. 
+
+Repetimos el modelo con los mismos criterios de exclusion que antes.
+
+```{r}
+glm(
+  sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(sesgo != 'ok' & error_selfperception == F) %>% mutate(sesgo = ifelse(sesgo == 'sub', 1, 0))
+) %>% summary()
+
+glm(
+  sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(sesgo != 'ok' & error_selfperception == F & error_otherperception == F) %>% mutate(sesgo = ifelse(sesgo == 'sub', 1, 0))
+) %>% summary()
+```
+
+En definitiva con toda la evidencia recabada decimos que no hay suficiente evidencia para apoyar una diferencia en los puntajes en la escala de FOMO dado por errores de estimacion en el propio uso a partir de la respuesta categorica. 
+
+# Heteropercepcion
+
+Para conceptualizar la heteropercepcion convertimos las categorias de estimacion (propias y ajenas) en numeros de manera que podamos comparar si el numero es mayor, menor o igual entre sujetos. 
+
+```{r}
+h2_dataset$selfperception_catnum <- fct_recode(h2_dataset$selfperception_cat,
+           '6' = 'Más de 3 hs por día', 
+           '5' = '2-3 hs por día', 
+            '4' = '1-2 hs por día',
+            '3' = '31-60 min por día',
+            '2' = '10-30 min por día',
+            '1' = 'Menos de 10 min por día')
+h2_dataset$otherperception_catnum <- fct_recode(h2_dataset$otherperception_cat,
+           '6' = 'Más de 3 hs por día', 
+           '5' = '2-3 hs por día', 
+            '4' = '1-2 hs por día',
+            '3' = '31-60 min por día',
+            '2' = '10-30 min por día',
+            '1' = 'Menos de 10 min por día')
+
+h2_dataset <- h2_dataset %>% ungroup() %>%
+  mutate(
+    selfperception_catnum = as.integer(selfperception_catnum),
+    otherperception_catnum = as.integer(otherperception_catnum),
+    other_sesgo = ifelse(selfperception_catnum == otherperception_catnum, 'same',
+                    ifelse(selfperception_catnum > otherperception_catnum, 'over', 'under')
+                    )
+  )
+```
+
+
+Comparamos el puntaje en la escala de FOMO entre los distintos grupos.
+
+```{r}
+h2_dataset %>%
+  ggplot(aes(x = other_sesgo, y = fomo_puntaje, fill = other_sesgo)) +
+  geom_violin(trim = F) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2)) +
+  stat_summary(fun.data = mean_se, fun.args = list('mult' = 2), geom = 'errorbar', width = 0.1) +
+  ylab('FOMO') + xlab('Percepcion sobre el uso ajeno') +
+  scale_fill_discrete('Percepcion', labels = c('Equivalente', 'Sobreuso', 'Subuso')) + 
+  scale_x_discrete(
+    labels=c("same" = "Equivalente", "over" = "Sobreuso",
+                              "under" = "Subuso"),
+    limits = c('under', 'same', 'over')
+  ) +
+  theme_classic()
+```
+
+Hacemos la comparacion formal entre aquellos que estiman un subuso contra los que creen que hacen un uso equivalente.  
+
+
+```{r}
+permutacion_other_eq_all <- comparacion_permutaciones_fn(h2_dataset %>% filter(other_sesgo != 'over'), 'other_sesgo', 'fomo_puntaje')
+```
+
+Comparamos la media con el intervalo de confianza proveniente de las permutaciones
+
+```{r}
+h2_dataset %>% filter(other_sesgo != 'over') %>% group_by(other_sesgo) %>% summarise(media = mean(fomo_puntaje)) %>% mutate(dif = diff(media))
+quantile(permutacion_other_eq_all, c(0.025, 0.975))
+```
+
+Se repite el mismo analisis excluyendo los que respondieron a esta pregunta de manera inconsistente 
+
+```{r}
+permutacion_other_eq_cons <- comparacion_permutaciones_fn(h2_dataset %>% filter(
+  other_sesgo != 'over' & error_otherperception == F), 'other_sesgo', 'fomo_puntaje'
+  )
+
+h2_dataset %>% filter(other_sesgo != 'over' & error_otherperception == F) %>% group_by(other_sesgo) %>% summarise(media = mean(fomo_puntaje)) %>% mutate(dif = diff(media))
+quantile(permutacion_other_eq_cons, c(0.025, 0.975))
+```
+
+
+```{r}
+permutacion_other_eq_all_cons <- comparacion_permutaciones_fn(h2_dataset %>% filter(
+  other_sesgo != 'over' & error_otherperception == F & error_selfperception == F), 'other_sesgo', 'fomo_puntaje'
+  )
+
+h2_dataset %>% filter(other_sesgo != 'over' & error_otherperception == F & error_selfperception == F) %>% group_by(other_sesgo) %>% summarise(media = mean(fomo_puntaje)) %>% mutate(dif = diff(media))
+quantile(permutacion_other_eq_all_cons, c(0.025, 0.975))
+```
+
+Hacemos el modelo logistico para este caso
+
+```{r}
+glm(
+  other_sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(other_sesgo != 'over') %>% mutate(other_sesgo = ifelse(other_sesgo == 'under', 1, 0))
+) %>% summary()
+```
+Se incluyen unicamente aquellos con respuestas consistentes en una de las preguntas.
+
+```{r}
+glm(
+  other_sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(other_sesgo != 'over' & error_otherperception == F) %>% mutate(other_sesgo = ifelse(other_sesgo == 'under', 1, 0))
+) %>% summary()
+```
+
+Unicamente con los consistentes en todas las preguntas.
+
+```{r}
+glm(
+  other_sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(other_sesgo != 'over' & error_otherperception == F & error_selfperception == F) %>% mutate(other_sesgo = ifelse(other_sesgo == 'under', 1, 0))
+) %>% summary()
+```
+
+Ahora hacemos la comparacion entre los que percibian un subuso contra los que percibian un sobreuso 
+
+```{r}
+permutacion_other_over_all <- comparacion_permutaciones_fn(h2_dataset %>% filter(other_sesgo != 'same'), 'other_sesgo', 'fomo_puntaje')
+
+
+h2_dataset %>% filter(other_sesgo != 'same') %>% group_by(other_sesgo) %>% summarise(media = mean(fomo_puntaje)) %>% mutate(dif = diff(media))
+quantile(permutacion_other_over_all, c(0.025, 0.975))
+```
+Se replica usando unicamente los sujetos con respuestas consistentes para esta pregunta
+
+```{r}
+permutacion_other_over_cons <- comparacion_permutaciones_fn(h2_dataset %>% filter(other_sesgo != 'same' & error_otherperception == F), 'other_sesgo', 'fomo_puntaje')
+
+h2_dataset %>% filter(other_sesgo != 'same' & error_otherperception == F) %>% group_by(other_sesgo) %>% summarise(media = mean(fomo_puntaje)) %>% mutate(dif = diff(media))
+quantile(permutacion_other_over_cons, c(0.025, 0.975))
+```
+
+Se replica usando unicamente los sujetos consistentes en sus respuestas para ambas preguntas
+
+```{r}
+permutacion_other_over_all_cons <- comparacion_permutaciones_fn(h2_dataset %>% filter(
+  other_sesgo != 'same' & error_otherperception == F & error_selfperception == F), 'other_sesgo', 'fomo_puntaje')
+
+h2_dataset %>% 
+  filter(other_sesgo != 'same' & error_otherperception == F & error_selfperception == F) %>% 
+  group_by(other_sesgo) %>% summarise(media = mean(fomo_puntaje)) %>% mutate(dif = diff(media))
+quantile(permutacion_other_over_all_cons, c(0.025, 0.975))
+```
+
+Se hace el modelo logistico para cada caso. 
+
+```{r}
+glm(
+  other_sesgo ~ fomo_puntaje, family = binomial(link = 'logit'), 
+  data = h2_dataset %>% filter(other_sesgo != 'same' & error_otherperception == F & error_selfperception == F) %>% mutate(other_sesgo = ifelse(other_sesgo == 'under', 1, 0))
+) %>% summary()
+```
+
+
+Se hace el modelo lineal para ver el efecto de la interaccion.
+
+```{r}
+lm(
+  fomo_puntaje ~ sesgo + other_sesgo + sesgo*other_sesgo, data = h2_dataset %>%
+    filter(error_otherperception == F & error_selfperception == F) %>%
+    mutate(sesgo = ifelse(sesgo == 'sub', 1, 0),
+           other_sesgo = ifelse(other_sesgo == 'under', 1, 0))
+) %>% summary()
+```
+
+
+
+# Estimacion numerica
+
+## GAM
+
+```{r}
+library(mgcv)
+library(performance)
+```
+
+Calculamos la autopercepcion de cada sujeto
+
+```{r}
+h2_dataset <- h2_dataset %>% mutate(autopercepcion = selfperception_num-uso_screnshot)
+```
+
+Graficamos la asociacion
+
+```{r}
+ggplot(
+  data = h2_dataset,
+  aes(x = autopercepcion, y = fomo_puntaje)
+) + geom_point(aes(color = error_otherperception, shape = error_selfperception)) +
+  geom_smooth(method = 'loess', linetype = 'dashed') + geom_smooth(method = 'lm', color = 'red') +
+  theme(legend.position = 'bottom')
+```
+
+
+Ajustamos un modelo lineal con todos los sujetos
+
+```{r}
+modelo_lineal_autopercepcion <- lm(fomo_puntaje ~ autopercepcion, data = h2_dataset)
+```
+
+Chequeamos el resumen general
+
+```{r}
+summary(modelo_lineal_autopercepcion)
+```
+Hacemos graficos diagnosticos. Primero chequeamos la homogeneidad de la varianza 
+
+```{r}
+performance::check_heteroscedasticity(modelo_lineal_autopercepcion)
+```
+```{r}
+performance::check_heteroscedasticity(modelo_lineal_autopercepcion) %>% plot() + labs(title = '', subtitle = '', y = 'Raiz cuadrada de los Residuales Estandarizados', x = 'Valores ajustados')
+```
+
+Despues chequeamos la normalidad de los residuales.
+
+```{r}
+performance::check_normality(modelo_lineal_autopercepcion) %>% plot() + labs(title = '', subtitle = '', y = 'Densidad', x = 'Residuales')
+```
+
+Por ultimo evaluamos la presencia de outliers y valores influyentes. 
+
+```{r}
+performance::check_outliers(modelo_lineal_autopercepcion, 
+                            method = c('cook', "zscore", "zscore_robust", "iqr"))
+```
+Se encontraron 4 outliers utilizando una variedad de metodos. 
+
+
+Evaluamos especificamente outliers
+
+
+```{r}
+plot(modelo_lineal_autopercepcion, 4, id.n = 5)
+plot(check_model(modelo_lineal_autopercepcion))[[4]]
+```
+
+Repetimos el modelo excluyendo a estos sujetos
+
+```{r}
+nuevo_modelo_lineal_autopercepcion <- lm(fomo_puntaje ~ autopercepcion, data = h2_dataset[-c(92, 271, 324, 337, 307, 204, 251),])
+```
+
+
+```{r}
+summary(nuevo_modelo_lineal_autopercepcion)
+```
+
+
+```{r}
+check_model(nuevo_modelo_lineal_autopercepcion)
+```
+
+```{r}
+check_heteroscedasticity(nuevo_modelo_lineal_autopercepcion)
+check_normality(nuevo_modelo_lineal_autopercepcion)
+```
+
+```{r}
+boot::boot(
+  h2_dataset[-c(92, 271, 324, 337, 307, 204, 251),],
+  statistic = function(data,idx){coef(lm(fomo_puntaje ~ autopercepcion, data = data[idx,]))[2]},
+  R = 10000
+) %>% boot::boot.ci()
+```
+
+Repetimos el modelo pero excluyendo los sujetos con respuestas inconsistentes en la autopercepcion.
+
+```{r}
+modelo_lineal_autoconsistente <- lm(fomo_puntaje ~ autopercepcion, 
+                                    data = h2_dataset[-c(92, 271, 324, 337, 307, 204, 251),] %>% 
+                                      filter(error_selfperception == F)
+                                    )
+summary(modelo_lineal_autoconsistente)
+```
+Chequeo diagnosticos para el modelo
+
+```{r}
+performance::check_model(modelo_lineal_autoconsistente)
+```
+
+Vuelvo a ajustar el mismo modelo pero esta vez excluyendo tambien los que tuvieron respuestas inconsistentes para la heteropercepcion.
+
+```{r}
+modelo_lineal_all_consistente <- lm(fomo_puntaje ~ autopercepcion, 
+                                    data = h2_dataset[-c(92, 271, 324, 337, 307, 204, 251),] %>% 
+                                      filter(error_selfperception == F & error_otherperception == F)
+                                    )
+summary(modelo_lineal_all_consistente)
+```
+
+Chequeamos los diagnosticos
+
+```{r}
+performance::check_model(modelo_lineal_all_consistente)
+```
+
+Por ultimo comparamos entre los 3 tipos de modelo
+
+
+```{r}
+performance::compare_performance(nuevo_modelo_lineal_autopercepcion, modelo_lineal_autoconsistente, modelo_lineal_all_consistente)
+```
+
+Comparo los 3 modelos pero en tanto el coeficiente del predictor de interes.
+
+```{r}
+coef(nuevo_modelo_lineal_autopercepcion)*60
+coef(modelo_lineal_autoconsistente)*60
+coef(modelo_lineal_all_consistente)*60
+```
+Calculamos el intervalo de confianza para el coeficiente usando metodo tradicional
+
+```{r}
+format(confint(nuevo_modelo_lineal_autopercepcion)*60, scientific=F)
+format(confint(modelo_lineal_autoconsistente)*60, scientific=F)
+format(confint(modelo_lineal_all_consistente)*60, scientific=F)
+```
+Calculamos de nuevo el intervalo usando bootstrap. 
+
+```{r}
+boot::boot(
+  h2_dataset[-c(92, 271, 324, 337, 307, 204, 251),] %>% 
+    mutate(autopercepcion = autopercepcion/60),
+  statistic = function(data,idx){coef(lm(fomo_puntaje ~ autopercepcion, data = data[idx,]))[2]},
+  R = 10000
+) %>% boot::boot.ci()
+
+boot::boot(
+  h2_dataset[-c(92, 271, 324, 337, 307, 204, 251),] %>% 
+    mutate(autopercepcion = autopercepcion/60) %>% 
+    filter(error_selfperception == F),
+  statistic = function(data,idx){coef(lm(fomo_puntaje ~ autopercepcion, data = data[idx,]))[2]},
+  R = 10000
+) %>% boot::boot.ci()
+
+boot::boot(
+  h2_dataset[-c(92, 271, 324, 337, 307, 204, 251),] %>% 
+    mutate(autopercepcion = autopercepcion/60) %>% 
+    filter(error_selfperception == F & error_otherperception == F),
+  statistic = function(data,idx){coef(lm(fomo_puntaje ~ autopercepcion, data = data[idx,]))[2]},
+  R = 10000
+) %>% boot::boot.ci()
+```
+
+# Autopercepcion con ventana
+
+Creo una funcion para calcular, moviendo la ventana, el valor que le corresponde de estimacion si esta dentro ('ok'), por arriba ('over') o por debajo ('under').
+
+```{r}
+funcion_ventana <- function(diferencia_estimacion, valor_ventana){
+  if(abs(diferencia_estimacion) < valor_ventana){
+    return('ok')
+  }else if(diferencia_estimacion > valor_ventana){
+    return('over')
+  }else{
+    return('under')
+  }
+}
+```
+Genero otra funcion que aplica la funcion anterior al dataframe 
+
+```{r}
+funcion_rolling_ventana <- function(valor_ventana, filtro = NA){
+  if(is.na(filtro) == T){
+    fn_df = h2_dataset
+  }else if(filtro == 'self'){
+    fn_df = h2_dataset %>% filter(error_selfperception == F)
+  }else if(filtro == 'all'){
+    fn_df = h2_dataset %>% filter(error_selfperception == F & error_otherperception == F)
+  }
+  fn_df %>% rowwise() %>% mutate(sesgo_numerico = funcion_ventana(autopercepcion, valor_ventana)) %>% ungroup() %>%
+  group_by(sesgo_numerico) %>%
+  summarise(n = n(), media = mean(fomo_puntaje)) %>% mutate(ventana = valor_ventana)
+}
+```
+
+Para determinar el valor optimo de la ventana establecemos una grilla generosa de 1 segundo hasta 1 hora.
+
+```{r}
+diferencia_medias_ventana <- lapply(
+  seq(1, 3600),
+  function(x) funcion_rolling_ventana(x)
+) %>% bind_rows()
+```
+
+Graficamos ahora la proporcion de sujetos que quedo representado en cada caso. 
+
+```{r}
+ggplot(diferencia_medias_ventana %>% mutate(n = n/nrow(h2_dataset)),
+       aes(x = ventana, y = n, color = sesgo_numerico)) +
+  geom_line()
+```
+
+Calculamos que valor de ventana arroja una proporcion de casos de estimacion correcta mayor a 50%.
+
+```{r}
+diferencia_medias_ventana %>% mutate(n = n/nrow(h2_dataset)) %>% 
+  filter(sesgo_numerico == 'ok' & n > 0.5) 
+```
+
+Vemos que el valor es de 2461, con ese valor en mente volvemos a correr nuestra funcion tomando ese valor como umbral superior de la grilla. 
+```{r}
+diferencia_medias_ventana <- lapply(
+  seq(1, 2461),
+  function(x) funcion_rolling_ventana(x)
+) %>% bind_rows()
+```
+
+Ahora podemos graficar los resultados de la media de FOMO para los distintos valores de ventana
+
+```{r}
+ventana_plot_all <- ggplot(diferencia_medias_ventana %>% mutate(ventana = ventana/60),
+       aes(x = ventana, y = media, color = sesgo_numerico)) +
+  geom_point() +
+  geom_smooth(aes(group = sesgo_numerico), color = 'black', method = 'loess', alpha = 0.25, se = F, linetype = 'dashed') +
+  scale_y_continuous('Media de FOMO') + scale_x_continuous('Valor de la ventana (minutos)') +
+  theme_classic() +
+  scale_color_discrete('Tipo de Respuesta', labels = c('Correcta', 'Sobreestimacion', 'Subestimacion')) +
+  theme(legend.position = c(0.3,0.85), legend.background = element_rect(size=0.5, linetype="solid", colour ="black"))
+ventana_plot_all
+```
+
+Aplicamos la funcion unicamente con los sujetos con respuestas consistentes en la autopercepcion
+
+```{r}
+diferencia_medias_ventana_autoconsistentes <- lapply(
+  seq(1, 2461),
+  function(x) funcion_rolling_ventana(x, filtro = 'self')
+) %>% bind_rows()
+```
+
+Graficamos el resultado
+
+```{r}
+ventana_plot_autoconsistentes <- ggplot(diferencia_medias_ventana_autoconsistentes %>% mutate(ventana = ventana/60),
+       aes(x = ventana, y = media, color = sesgo_numerico)) +
+  geom_point() +
+  geom_smooth(aes(group = sesgo_numerico), color = 'black', method = 'loess', alpha = 0.25, se = F, linetype = 'dashed') +
+  scale_y_continuous('Media de FOMO') + scale_x_continuous('Valor de la ventana (minutos)') +
+  theme_classic() +
+  scale_color_discrete('Tipo de Respuesta', labels = c('Correcta', 'Sobreestimacion', 'Subestimacion')) +
+  theme(legend.position = 'none')
+ventana_plot_autoconsistentes
+```
+
+Por ultimo aplicamos esta funcion unicamente con los sujetos donde ambas respuestas fueron consistentes
+
+```{r}
+diferencia_medias_ventana_all_consistente <- lapply(
+  seq(1, 2461),
+  function(x) funcion_rolling_ventana(x, filtro = 'all')
+) %>% bind_rows()
+```
+
+Graficamos el resultado
+
+```{r}
+ventana_plot_all_consistente <- ggplot(diferencia_medias_ventana_all_consistente %>% mutate(ventana = ventana/60),
+       aes(x = ventana, y = media, color = sesgo_numerico)) +
+  geom_point() +
+  geom_smooth(aes(group = sesgo_numerico), color = 'black', method = 'loess', alpha = 0.25, se = F, linetype = 'dashed') +
+  scale_y_continuous('Media de FOMO') + scale_x_continuous('Valor de la ventana (minutos)') +
+  theme_classic() +
+  scale_color_discrete('Tipo de Respuesta', labels = c('Correcta', 'Sobreestimacion', 'Subestimacion')) +
+  theme(legend.position = 'none')
+ventana_plot_all_consistente
+```
+
+Unimos todos los graficos en uno solo
+
+```{r}
+rbind(
+  diferencia_medias_ventana,
+  diferencia_medias_ventana_autoconsistentes, 
+  diferencia_medias_ventana_all_consistente
+) %>% mutate(
+  tipo = rep(c('Todos los sujetos','Autoconsistentes','Auto y Heteroconsistentes'), c(nrow(diferencia_medias_ventana), nrow(diferencia_medias_ventana_autoconsistentes), nrow(diferencia_medias_ventana_all_consistente))),
+  ventana = ventana/60) %>% 
+  ggplot(
+    aes(x = ventana, y = media, color = sesgo_numerico)
+  ) +
+  geom_point() +
+  geom_smooth(aes(group = sesgo_numerico), color = 'black', alpha = 0.25, se = F, linetype = 'dashed') +
+  scale_y_continuous('Media de FOMO') + scale_x_continuous('Valor de la ventana (minutos)') +
+  theme_classic() +
+  scale_color_discrete('Tipo de Respuesta', labels = c('Correcta', 'Sobreestimacion', 'Subestimacion')) +
+  theme(legend.position = 'bottom') +
+  facet_wrap(~tipo, labeller = )
+ggsave('ventana.png')
+```
+
+
+
+Ahora que tenemos ese dato podemos repetir algunos analisis y hacer otros nuevos contemplando esto como dato a marcar.
+
+```{r}
+ggplot(
+  data = h2_dataset,
+  aes(x = autopercepcion)
+) +
+  geom_histogram() +
+  facet_wrap(~error_selfperception)
+```
+
+Con esta etiqueta logramos desahcernos de casi todos los valores extremos lo cual nos dejo una distribucion mucho mas parecida a una normal. Podemos calcular algunas medidas de resumen unicamente de los sujetos con respuestas acordes. 
+
+```{r}
+h2_dataset %>% filter(error_selfperception == FALSE) %>% transmute(x = autopercepcion/60) %>% summary(.x)
+```
+
+Ahora podemos correr un bootstrap sencillo para ver la distribucion de la media. 
+
+```{r}
+h2_dataset_acorde <- h2_dataset %>% filter(error_selfperception == FALSE)
+sample_mean <- function(data, indices){
+  boot_data <- data[indices,]
+  return(mean(boot_data$autopercepcion/60))
+}
+boot_media_acorde <- boot(
+  h2_dataset_acorde,
+  sample_mean,
+  10000,
+  parallel = 'multicore',
+  ncpus = 5
+)
+plot(boot_media_acorde)
+boot.ci(boot_media_acorde)
+```
+
+
+
+
+```{r}
+sd(h2_dataset$autopercepcion)
+sd(h2_dataset_acorde$autopercepcion)
+sim_test <- replicate(
+  10000,
+  mean(
+    h2_dataset_acorde$uso_screnshot - (h2_dataset_acorde$uso_screnshot + rnorm(nrow(h2_dataset_acorde), sd = 4000))
+    )
+  )
+
+```
+
+
+
+
+
+Para ver la influencia de valores individuales vamos a graficar la diferencia entre la media global (con todos los datos) y la media sin un sujeto en particular segun el indice del sujeto que se extrae.
+
+```{r}
+diferencia_media_df <- data.frame(
+  media_global = mean(h2_dataset$autopercepcion),
+  media_modificada = sapply(
+  seq(1, nrow(h2_dataset)),
+  function(x) mean(h2_dataset$autopercepcion[-x])
+  ),
+  indice = seq(1, nrow(h2_dataset))
+) %>%
+  mutate(diferencia = media_global - media_modificada)
+
+ggplot(
+  data = diferencia_media_df,
+    aes(x = indice, y = diferencia)
+  ) +
+  geom_point() +
+  geom_hline(yintercept = 0)
+```
+
+```{r}
+hist(diferencia_media_df$diferencia)
+```
+
+Posteriormente vamos a tomar ese mismo dataframe y vamos a ordenarlo segun el nivel de impacto en la media que tiene cada sujeto para ir retirando de manera secuencial y acumulativa por el orden de impacto, calculando a cada paso la nueva media. 
+
+```{r}
+indices_acumulados <- diferencia_media_df %>%
+  arrange(
+    desc(
+      abs(diferencia)
+         )
+    ) %>% 
+  pull(indice)
+
+plot(
+  x = seq(1:50),
+  y = sapply(
+  seq(1:50),
+  function(x) mean(
+    h2_dataset$autopercepcion[-c(indices_acumulados[1:x])]
+    )
+  ),
+  type = 'l'
+)
+```
+
+
+
+
+```{r}
+plot(
+  x = seq(max(h2_dataset$autopercepcion), min(h2_dataset$autopercepcion), length.out = 1000),
+  y = sapply(
+  seq(max(h2_dataset$autopercepcion), min(h2_dataset$autopercepcion), length.out = 1000),
+  function(x) mean(h2_dataset %>% filter(autopercepcion < x) %>% pull(autopercepcion))
+  ),
+  type = 'l'
+)
+```
+
+Media robusta
+
+```{r}
+sapply(
+  seq(1,10),
+  function(x) dplR::tbrm(h2_dataset$autopercepcion, C = x)
+)
+WRS2::winmean(h2_dataset$autopercepcion, tr = 0.2)
+```
+
+
+
+```{r}
+plot(
+  x = seq(max(h2_dataset$autopercepcion), min(h2_dataset$autopercepcion), length.out = 1000),
+  y = sapply(
+  seq(max(h2_dataset$autopercepcion), min(h2_dataset$autopercepcion), length.out = 1000),
+  function(x) sum(h2_dataset$autopercepcion > x)
+       ),
+  type = 'l'
+)
+```
+
+```{r}
+ggplot(
+  data = h2_dataset,
+  aes(x = fomo_puntaje, y = autopercepcion)
+) +
+  geom_point() +
+  geom_smooth() +
+  facet_wrap(~error_selfperception)
+```
+
+```{r}
+ggplot(
+  data = h2_dataset,
+  aes(x = autopercepcion)
+) +
+  geom_histogram() +
+  facet_wrap(~error_selfperception)
+```
+
+
+
+
+```{r}
+median(h2_dataset$autopercepcion)
+
+plot(
+  x = seq(0.01,0.25, length.out = 1000),
+  y = sapply(
+  seq(0.01,0.25, length.out = 1000),
+  function(x) mean(h2_dataset$autopercepcion, trim = x)
+       ),
+  type = 'l'
+)
+
+```
+
+
+
+```{r}
+corr_boot <- function(data, indices){
+  boot_data <- data[indices,]
+  pearson_value <- cor(boot_data$fomo_puntaje, boot_data$autopercepcion)
+  spearman_value <- cor(boot_data$fomo_puntaje, boot_data$autopercepcion, method = 'spearman')
+  c(pearson_value, spearman_value)
+}
+
+boot_test <- boot(
+  data = h2_dataset,
+  statistic = corr_boot,
+  R = 10000, 
+  parallel = 'multicore',
+  ncpus = 4
+)
+
+plot(boot_test, index = 1)
+plot(boot_test, index = 2)
+
+boot.ci(boot_test, index = 2)
+```
+
+```{r}
+samplemean <- function(data, indices) {
+  boot_data <- data[indices,]
+  return(mean(boot_data$autopercepcion))
+}
+boot_test <- boot(
+  data = h2_dataset,
+  statistic = samplemean,
+  R = 10000, 
+  parallel = 'multicore',
+  ncpus = 4
+)
+boot.ci(boot_test, conf = .99)
+plot(boot_test)
+```
+
+
+
+En primer lugar vemos la frecuencia de cada ocurrencia. 
+
+```{r}
+h2_dataset %>% ungroup() %>%
+  count(sesgo) %>% 
+  mutate(
+    freq_r = n/sum(n)
+    ) %>%
+  ggplot(aes(x = sesgo, y = freq_r)) +
+  geom_col(aes(fill = sesgo)) +
+  geom_label(aes(label = n)) +
+  theme_classic() +
+  ylab('Frecuencia relativa') + xlab('Tipo de Estimacion') +
+  scale_fill_discrete('Estimacion', labels = c("Correcta", 'Sobreestimacion', 'Subestimacion'))
+```
