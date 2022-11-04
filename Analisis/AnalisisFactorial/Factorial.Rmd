@@ -1,0 +1,416 @@
+---
+title: "Analisis Factorial"
+output: html_notebook
+---
+
+```{r}
+library(Hmisc)
+library(tidyverse)
+library(corrplot)
+library(GGally)
+library(boot)
+library(psych)
+library(ggridges)
+```
+
+
+```{r}
+spam <- rbind(
+ read_csv('../../Datos/DatosReales/EXCEL (respuestas) - Respuestas de formulario 1.csv') %>% 
+  select(starts_with('Por favor, indicá')),
+ read_csv('../../Datos/DatosReales/EXCEL PRIMER FORMULARIO - 01 Percepciones del uso, FOMO y tiempo de uso real de Instagram en jóvenes argentinos.csv') %>%
+   select(starts_with('Por favor, indicá'))
+) %>%
+  drop_na(everything())
+
+spam <- final_dataset %>% 
+  select(A1:P3) %>%
+  drop_na()
+```
+
+# Visualizacion multivariada
+
+El objetivo de esta visualizacion es ver, al mismo tiempo, la distribucion de cada variable y la relacion bivariada para examinar patrones no monotonicos.
+
+```{r}
+ggpairs(spam,
+upper = list(continuous = "density", combo = "box_no_facet"),
+lower = list(continuous = wrap("points", position=position_jitter(height= .3, width=.3)), combo = "dot_no_facet"))
+```
+
+Para ver mejor la distribucion de cada variable vamos a utilizar un grafico de ridge lines. 
+
+```{r}
+spam %>% pivot_longer(cols = everything(), names_to = 'Var', values_to = 'Res') %>%
+  ggplot(
+    aes(x = Res, y = Var, fill = Res)
+  ) +
+  geom_density_ridges(
+    )
+```
+
+El supuesto de distribucion normal necesario para realizar correlaciones policloricas pareceria no estar justificado. 
+
+
+# Reduccion de la dimensionalidad heuristica
+
+Lo primero que podemos hacer es promediar aquellas variables que creemos que pertenecen a la misma categoria, es decir todas aquellas que son de uso activo y todas aquellas que son de uso pasivo.
+
+```{r}
+resumen_actividad <- spam %>% 
+  rowwise() %>%
+  transmute(
+    media_activo = mean(
+      c(A1,A2,A3,A4)
+      ),
+    media_pasivo = mean(
+      c(P1,P2,P3)
+    ),
+    mediana_activo = median(
+      c(A1,A2,A3,A4)
+    ),
+    mediana_pasivo = median(
+      c(P1,P2,P3)
+    )
+  )
+```
+
+Podemos graficar ahora la relacion entre la media del uso activo y el uso pasivo. Si no hay relacion entre ambas esperariamos ver que no hay ningun tipo de ajuste posibles decir una nube de puntos difusa.
+
+```{r}
+ggplot(
+  resumen_actividad,
+  aes(x = media_activo, y = media_pasivo)
+) +
+  geom_jitter(width = 0.025) + 
+  geom_smooth(se = F) + geom_smooth(method = 'lm', color = 'red', se = F) +
+  geom_density_2d(color = 'grey') +
+  theme_classic()
+```
+
+Se ve una clara relacion entre ambas variables la cual incluso podria ser no lineal teniendo la forma de un polinomio cubico. 
+
+Lo mismo podemos graficar usando la mediana en lugar de la media
+
+```{r}
+ggplot(
+  resumen_actividad,
+  aes(x = mediana_activo, y = mediana_pasivo)
+) +
+  geom_jitter(width = 0.025) + 
+  geom_smooth(se = F) + geom_smooth(method = 'lm', color = 'red', se = F) +
+  geom_density_2d(color = 'grey') +
+  theme_classic()
+```
+
+De nuevo la relacion esta lejos de ser igual a cero. De base esto nos lleva a pensar que, aun si estas preguntas miden lo que nos proponemos medir, el uso activo y pasivo no estan disociados el uno del otro. 
+
+# Correlaciones
+
+## Spearman
+
+```{r}
+cor(spam, method = 'spearman') %>% corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+```
+
+## Kendall
+
+```{r}
+cor(spam, method = 'kendall') %>% corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+```
+## Policlorica
+
+```{r}
+polychoric(x = spam)$rho %>%
+  corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+```
+
+
+
+## Gamma
+
+Hacer la correlacion gamma no es tan sencillo como con las otras. Para hacerla vamos a usar la funcion `rcorr.cens` del paquete `Hmisc`. El problema con esta funcion es que espera dos vectores de numeros por lo que si le damos el dataframe como argumento (como haciamos en los otros casos) nos va a dar un error. Lo que tenemos que hacer es buscar la manera de decirle a R que calcule la correlacion para todas las combinaciones de las variables. Para eso usamos la funcion `expand.grid`, aplicamos la funcion para calcular la correlacion gamma de manera row-wise, extraemos la columna resultante que contiene la correlacion y convertimos el resultando en una matrix cuadrada segun la cantidad de columnas es decir una matriz 7x7.
+Por ultimo le agregamos los nombres de las columnas y las filas.
+
+```{r}
+gamma_matrix <- expand.grid(colnames(spam), colnames(spam)) %>% tibble() %>%
+  rowwise() %>%
+  mutate(
+    correlacion = rcorr.cens(spam[[Var1]], spam[[Var2]], outx = TRUE)['Dxy']
+  ) %>% 
+  pull(correlacion) %>%
+  matrix(nrow = ncol(spam), ncol = ncol(spam))
+colnames(gamma_matrix) <- colnames(spam)
+rownames(gamma_matrix) <- colnames(spam)
+```
+
+Ahora si podemos proceder a graficar el resultado.
+
+```{r}
+gamma_matrix %>% 
+  corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+```
+
+# Correlaciones con intervalos
+
+Para comparar los niveles de correlacion de cada una de las variables con los distintos metodos vamos a calcular el nivel de la correlacion y a su vez vamos a calcular los intervalos de confianza del 95% sobre el valor del estadistico correspondiente usando un Bootstrap no parametrico de 5000 muestras.
+
+Para eso primero creamos una funcion que calcula los tres tipos de correlacion a partir de dos vectores numericos.
+
+```{r}
+all_corr <- function(vector_x, vector_y){
+  kendall_cor <- cor(vector_x, vector_y, method = 'kendall')
+  spearman_cor <- cor(vector_x, vector_y, method = 'spearman')
+  gamma_cor <- unname(rcorr.cens(vector_x, vector_y, outx = TRUE)['Dxy']) 
+  c(kendall_cor, spearman_cor, gamma_cor)
+}
+```
+
+Ahora generamos un datafame con todas las combinaciones de dos variables dadas por nuestras 7 variables de interes.
+
+```{r}
+all_comb <- expand.grid(
+  colnames(spam), colnames(spam)
+)
+```
+
+Sobre esa base vamos a aplicarle a cada fila nuestra funcion y convertir los resultados en un dataframe con 3 columnas (una para cada tipo de correlacion) y la misma cantidad de filas que el objeto `all_comb`
+
+```{r}
+all_corr_df <- all_comb %>%
+  pmap(
+    ~ all_corr(spam[[.x]], spam[[.y]])
+  ) %>% unlist() %>% matrix(nrow = 49, ncol = 3, byrow = TRUE) %>%
+  as.data.frame()
+colnames(all_corr_df) <- c('Kendall', 'Spearman', 'Gamma')
+```
+
+Combinamos ambos dataframes en uno solo uniendo las columnas y eliminamos los valores de 1 donde no hay variabilidad
+
+```{r}
+all_comb_corr_df <- cbind(
+  all_comb, 
+  all_corr_df
+) %>%
+  filter(Kendall < 1 & Spearman < 1 & Gamma < 1)
+```
+
+Calculo los indices de las filas que estan repetidas solo que tienen otro orden. 
+
+```{r}
+ind_dup <- str_split(paste(all_comb_corr_df$Var1, all_comb_corr_df$Var2), ' ') %>% 
+  lapply(
+    str_sort
+  ) %>% unlist() %>% 
+  matrix(ncol = 2, byrow = TRUE) %>% 
+  as.data.frame() %>%
+  duplicated()
+```
+
+Utilizo los indices calculados anteriormente para filtrar el dataframe 
+
+```{r}
+clean_comb_corr <- all_comb_corr_df[ind_dup, ]
+```
+
+
+Para comparar entre los distintos metodos de correlacion vamos a modificar el dataframe `clean_comb_corr` para contener a los pares de variables en una sola columna y las correlaciones vamos a colapsarlas en una sola columna cambiando el dataframe a formato long. Una vez realizadas esas transformaciones podemos graficar poniendo en el eje x el nivel de las distintas correlaciones y en el eje y los pares de variables empleados para calcular la correlacion. 
+
+```{r}
+clean_comb_corr %>%
+  unite('Var_comb', Var1:Var2, sep = '-') %>%
+  pivot_longer(Kendall:Gamma, names_to = 'tipo_cor', values_to = 'corr_val') %>%
+  ggplot(
+  aes(y = Var_comb, x = corr_val, color = tipo_cor)
+) +
+  geom_point()
+```
+
+Con el dataframe ya filtrado vamos a calcular los intervalos para la correlacion gamma utilizando bootstrap. Para esto vamos a usar el paquete `boot` y vamos a generar una nueva funcion llamada `gamma_cor`.
+
+```{r}
+gamma_cor <- function(data, indices, variable1, variable2){
+  boot_data <- data[indices,]
+  vector_x <- boot_data[[variable1]]
+  vector_y <- boot_data[[variable2]]
+  unname(rcorr.cens(vector_x, vector_y, outx = TRUE)['Dxy'])
+}
+```
+
+Una vez que tenemos la funcion iteramos por cada par de variables del dataframe para usar la funcion de boot en cada caso y obtenemos como resultado una lista con 21 elementos correspondientes a los resultados de cada 
+
+```{r}
+boot_results <- clean_comb_corr %>%
+  pmap(
+    ~ boot(
+        data = spam,
+        statistic = gamma_cor,
+        R = 5000,
+        variable1 = .x,
+        variable2 = .y,
+        parallel = 'multicore',
+        ncpus = 4
+      )
+  ) 
+```
+
+Con los resultados ya calculados podemos construir intervalos de confianza iterando sobre la lista de resultados y aplicando la funcion `boot.ci` en cada iteracion, extrayendo de esta los valores que nos interesan que son los limites del intervalo. 
+
+```{r}
+boot_cis <- lapply(
+  boot_results,
+  function(x) boot.ci(x, type = 'bca')[['bca']][c(4,5)]
+)
+```
+
+Con esto armamos un dataframe que contenga dos columnas, una para el limite inferior y otra para el limite superior del intervalo. 
+
+```{r}
+cis_df <- boot_cis %>% unlist() %>% matrix(ncol = 2, byrow = TRUE) %>%
+  as_tibble() %>% rename(low = V1, high = V2) 
+```
+
+Unimos el dataframe creado recien con el dataframe que contiene las combinaciones de las variables eliminando los valores de las correlaciones de Kendall y Spearman que no nos interesan siendo que los intervalos corresponden unicamente a la correlacion Gamma.
+
+```{r}
+cor_df_combinado <- cbind(
+  clean_comb_corr,
+  cis_df
+) %>% select(!c(Kendall,Spearman))
+```
+
+Para tener un adecuado control genero datos nulos a partir de una distribucion aleatoria de las variables de interes. Calculo entonces la metrica de interes para 1000 realizaciones del modelo nulo obteniendo asi una distribucion de la correlacion de interes bajo un modelo nulo.
+
+Para eso generamos una funcion llamada `null_gama_fun` la cual calcula una matriz de correlacion gamma para una realizacion de datos uniformemente distribuidos. 
+
+```{r}
+null_gama_fun <- function(){
+  matriz <- replicate(7,
+          sample(0:5, 281, replace = TRUE)) %>% as.matrix()
+  colnames(matriz) <- c(
+    paste0('A',1:4),
+    paste0('P', 1:3)
+  )
+  combinaciones <- expand.grid(colnames(matriz), colnames(matriz)) %>%
+  tibble()  %>%
+  rowwise() %>%
+  mutate(
+    correlacion = rcorr.cens(matriz[, Var1], matriz[,Var2], outx = TRUE)['Dxy']
+  ) %>%
+  pull(correlacion) %>%
+  matrix(nrow = ncol(matriz), ncol = ncol(matriz))
+  colnames(combinaciones) <- colnames(matriz)
+  rownames(combinaciones) <- colnames(matriz)
+  combinaciones
+}
+```
+
+Repetimos ese proceso 1000 veces armando un array 3d donde la tercera dimension es el numero de la repeticion. Promediamos cada elemento del array 3d es decir cada correlacion para obtener un estimado final del modelo nulo.
+
+```{r}
+null_gama_matriz <- replicate(1000, null_gama_fun()) %>% array(dim = c(7,7,10)) %>%
+  rowMeans(dims = 2)
+null_gama_matriz %>% corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
+```
+
+Vuelvo a replicar un grafico como aquel con todas las correlaciones pero esta vez usando unicamente los valores de las correlaciones de Gamma y los intervalos calculados anteriormente. 
+
+```{r}
+cor_df_combinado %>%
+  unite('Var_comb', Var1:Var2, sep = '-') %>%
+  ggplot(
+  aes(y = Var_comb, x = Gamma)
+) +
+  geom_pointrange(
+    aes(xmax = high, xmin = low)
+  ) +
+  geom_vline(xintercept = 0, linetype = 'dashed') + 
+  scale_x_continuous(limits = c(0,1))
+```
+
+# PCA
+
+## Policorica
+
+Vamos a utilizar la funcion `principal` del paquete `psych`. Definimos la cantidad de factores (componentes) igual a la cantidad de variables. La rotacion de la matriz la definimos como nula para evitar tener una matriz de componentes correlacionados. Como metodo de correlacion dado que tenemos variables ordinales vamos a utilizar la correlacion polyclorica. 
+
+```{r}
+poly_pca <- principal(spam, 7, rotate = 'none', cor = 'poly')
+```
+
+Hacemos un skree plot para ver la proporcion de varianza explicada por cada componente. 
+
+```{r}
+ggplot(
+  data = tibble(x = 1:7, y = poly_pca$Vaccounted[2,] * 100),
+  aes(x = x, y = y)
+) +
+  geom_col(fill = 'deepskyblue3') +
+  geom_point() +
+  geom_line() +
+  xlab('Componentes') + ylab('Proporcion de la varianza explicada')
+```
+
+El primer componente explica el `r round(poly_pca$Vaccounted[2,1] * 100, 2)`% de la varianza y el segundo componente explica el `r round(poly_pca$Vaccounted[2,2] * 100, 2)`% de la varianza. 
+
+```{r}
+fa.parallel(spam %>% as.data.frame(), fm = 'pa', fa = 'pa', cor = 'poly')
+```
+
+```{r}
+biplot(poly_pca, choose = c(1,2))
+```
+
+
+# CATPCA
+
+```{r}
+library(Gifi)
+```
+
+
+```{r}
+spam_ordinal <- spam %>% mutate(
+  across(.fns = ~factor(.x, levels = 0:5))
+) %>% as.data.frame()
+```
+
+
+```{r}
+captca <- princals(spam_ordinal, degrees = 3)
+```
+
+Podemos graficar la transformacion realizada a las variables originales. 
+
+```{r}
+plot(captca, plot.type = "transplot")
+```
+Hacemos un grafico de los loadings de cada variable en los dos componentes extraidos.
+
+
+```{r}
+plot(captca, "loadplot", main = "Loadings Uso Activo y Pasivo")
+```
+
+A su vez podemos realizar un scree plot de los diferentes componentes principales. 
+
+```{r}
+plot(captca, "screeplot")
+```
+
+```{r}
+plot(captca$objectscores, xlab = "dim1", ylab = "dim2", col = "RED", cex = .5)
+```
+
+
+
+```{r}
+lm(
+  fomo ~ dim1, data = data.frame(fomo = final_dataset$fomo_puntaje, dim1 = captca$objectscores[,1], dim2 = captca$objectscores[,2])
+) %>% performance::model_performance()
+```
+
+```{r}
+hist(h2_dataset$fomo_puntaje)
+```
+
