@@ -1,3 +1,5 @@
 /Datos/DatosReales
-
+/Pre-procesamiento/dataset_final.rda
+/Pre-procesamiento/prepro_dataset.rda
 .Rproj.user
+*/.Rhistory

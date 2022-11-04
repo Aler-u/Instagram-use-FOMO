@@ -1,0 +1,501 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Se cargan los datos y las librerias
+
+```{r}
+load('../../Pre-procesamiento/dataset_final.rda')
+library(tidyverse)
+library(ggpubr)
+```
+
+Creamos el nuevo dataset para este analisis eliminando aquellos usuarios que no reportaron horas reales de uso de instagram.
+
+```{r}
+h3_dataset <- final_dataset %>%
+  drop_na(uso_screnshot)
+```
+
+# Metodo 1
+
+Calculamos si la categoria que asignaron segun su autopercepcion coincide con las horas reales de uso de instagram. Para eso utilizamos una lookup table.
+
+```{r}
+lookup_table <- data.frame(
+  categoria = c('Más de 3 hs por día', '2-3 hs por día', '1-2 hs por día', '31-60 min por día', '10-30 min por día', 'Menos de 10 min por día'),
+  uper_bound = c(Inf, 10800, 7200, 3600, 1800, 600),
+  lower_bound = c(10800, 7200, 3600, 1860, 600, -Inf)
+)
+
+
+sesgo_estimacion_fun <- function(cat_value, num_value){
+  acierto <- ifelse(
+    between(num_value, lookup_table[lookup_table$categoria == cat_value, 3], lookup_table[lookup_table$categoria == cat_value, 2]), 'ok', F
+    )
+  if(acierto == F){
+    if(
+      num_value > lookup_table[lookup_table$categoria == cat_value, 2] #Si el valor esta por encima del umbral superior
+    ){
+      return('sub')
+    }else{
+      return('sobre')
+    }
+  }else{
+    return(acierto)
+  }
+}
+```
+
+Utilizando los objetos creados anteriormente calculamos para cada sujeto si subestimo, sobreestimo o tuvo una estimacion correcta.
+
+```{r}
+h3_dataset <- h3_dataset %>% 
+  rowwise() %>%
+  mutate(
+  sesgo = sesgo_estimacion_fun(selfperception_cat, uso_screnshot)
+  ) %>%
+  ungroup()
+```
+
+
+Calculamos las verdaderas frecuencias
+
+```{r}
+true_freq <- h3_dataset %>% count(sesgo)
+true_freq
+```
+
+Graficamos las verdaderas frecuencias contra el intervalo 95% de una distribucion binomial con probabilidad 1/3. 
+
+```{r}
+ggplot(true_freq,
+       aes(x = sesgo, y = n, color = sesgo)) +
+  geom_label(aes(y = n + 4,label = n, fill = sesgo), size = 4, color = 'black') +
+  geom_segment(aes(x=sesgo, xend=sesgo, y=0, yend=n)) +
+  geom_rect(
+    xmin = -Inf, xmax = Inf, 
+    aes(ymin = qbinom(0.025, 350, 1/3), ymax = qbinom(0.975, 350, 1/3)),
+    alpha = 0.25, 
+    fill = 'grey',
+    color = 'grey'
+  ) +
+  geom_hline(
+    yintercept = qbinom(0.025, 350, 1/3),
+    linetype = 'dashed'
+  ) +
+  geom_text(
+    y = qbinom(0.025, 350, 1/3) - 5,
+    x = 'sub',
+    label = paste0('Percentil 2.5%: ',qbinom(0.025, 350, 1/3)),
+    color = 'red'
+  ) +
+  geom_hline(
+    yintercept = qbinom(0.975, 350, 1/3),
+    linetype = 'dashed'
+  ) +
+  geom_text(
+    y = qbinom(0.975, 350, 1/3) + 5,
+    x = 'sub',
+    label = paste0('Percentil 97.5%: ',qbinom(0.975, 350, 1/3)),
+    color = 'red'
+  ) +
+  theme_classic() + 
+  ylab('Frecuencia') +
+  theme(legend.position = 'none') +
+  scale_x_discrete(
+    'Tipo de respuesta',
+    labels=c("ok" = "Correcta", "sobre" = "Sobreestimacion",
+                              "sub" = "Subestimacion"),
+    limits = c('sub', 'ok', 'sobre')
+  )
+ggsave('true_freq.png', width = 6)
+```
+
+
+Calculamos el intervalo del 95% de una distribucion binomial con probabilidad 1/3 equivalente a la distribucion nula para la categoria segun el N de la consistencia en la respuesta.
+
+```{r}
+freq_binom_ci <- h3_dataset %>% mutate(error_otherperception = ifelse(error_otherperception, 'Inconsistente', 'Consistente'),
+           error_selfperception = ifelse(error_selfperception, 'Inconsistente', 'Consistente'),
+           ) %>%
+    rename(Autopercepcion = error_selfperception,
+           Heteropercepcion = error_otherperception) %>%
+  count(Autopercepcion, Heteropercepcion) %>% 
+  mutate(
+    low_ci = qbinom(0.025, n, 1/3),
+    mid_ci = qbinom(0.5, n, 1/3),
+    high_ci = qbinom(0.975, n, 1/3)
+  )
+```
+
+Graficamos cada frecuencia individual separando segun el nivel de consistencia en las respuestas. Agregamos una banda de compatibilidad con una distribucion nula segun lo calculado anteriormente
+
+```{r}
+ggplot(
+  h3_dataset %>%
+    mutate(error_otherperception = ifelse(error_otherperception, 'Inconsistente', 'Consistente'),
+           error_selfperception = ifelse(error_selfperception, 'Inconsistente', 'Consistente'),
+           ) %>%
+    rename(Autopercepcion = error_selfperception,
+           Heteropercepcion = error_otherperception) %>%
+    count(sesgo, Heteropercepcion, Autopercepcion)
+) +
+  geom_point(aes(x = sesgo, y = n, color = sesgo), size = 2) +
+  geom_hline(data = freq_binom_ci,
+              aes(yintercept = low_ci), linetype = 'dashed') +
+  geom_hline(data = freq_binom_ci,
+              aes(yintercept = high_ci), linetype = 'dashed') +
+  geom_rect(
+    data = freq_binom_ci,
+    xmin = -Inf, xmax = Inf, 
+    aes(ymin = low_ci, ymax = high_ci),
+    alpha = 0.25
+  ) +
+  facet_grid(rows = vars(Autopercepcion), cols = vars(Heteropercepcion), scales = 'free', labeller = label_both) +
+  theme_classic() +
+  ylab('Frecuencia') +
+  theme(legend.position = 'none') +
+  scale_x_discrete(
+    'Tipo de respuesta',
+    labels=c("ok" = "Correcta", "sobre" = "Sobreestimacion",
+                              "sub" = "Subestimacion"),
+    limits = c('sub', 'ok', 'sobre')
+  )
+ggsave('freq_x_error.png')
+```
+
+Ahora tenemos que generar la distribucion nula de frecuencias, unicamente para los sujetos completamente consistentes. 
+
+```{r}
+freq_nula <- replicate(
+  10000,
+  sample(c('ok', 'sobre','sub'), 228, replace = T) %>% as_tibble() %>% count(value) %>% pull(n)
+  )
+rownames(freq_nula) <- c('ok', 'sobre', 'sub')
+freq_nula <- freq_nula %>% t() %>% as_tibble()
+```
+
+
+Calculamos de nuevo las verdaderas frecuencias pero utilizando unicamente los sujetos que fueron consistentes en todas sus respuestas.
+
+```{r}
+true_freq_consistente <- h3_dataset %>% filter(error_otherperception == F & error_selfperception == F) %>%
+  count(sesgo)
+```
+
+
+Graficamos la distribucion nula comparando con la verdadera frecuencia
+
+Primero para las respuestas correctas
+
+```{r}
+PlotFreqNulaOk <- ggplot(
+    freq_nula,
+    aes(x = ok)
+  ) +
+  geom_density(fill = 'lightblue') +
+  geom_vline(
+    aes(xintercept = true_freq_consistente %>% filter(sesgo == 'ok') %>% pull(n)), 
+             linetype = 'dashed') +
+  theme_classic() +
+  xlab('Frecuencia') + ylab('Densidad')
+PlotFreqNulaOk
+```
+Ya por el grafico vemos que no es incompatible con la distribucion nula.
+
+```{r}
+true_freq_consistente %>% filter(sesgo == 'ok') %>% pull(n)
+quantile(freq_nula$ok, c(0.025,0.975))
+mean(freq_nula$ok >= true_freq_consistente %>% filter(sesgo == 'ok') %>% pull(n))
+```
+
+Despues para las sobreestimaciones
+
+```{r}
+PlotFreqNulaSobre <- ggplot(
+    freq_nula,
+    aes(x = sobre)
+  ) +
+  geom_density(fill = 'lightblue') +
+  geom_vline(
+    aes(xintercept = true_freq_consistente %>% filter(sesgo == 'sobre') %>% pull(n)), 
+             linetype = 'dashed') +
+  theme_classic() +
+  xlab('Frecuencia') + ylab('Densidad')
+PlotFreqNulaSobre
+```
+
+```{r}
+true_freq_consistente %>% filter(sesgo == 'sobre') %>% pull(n)
+quantile(freq_nula$sobre, c(0.025,0.975))
+mean(freq_nula$sobre >= true_freq_consistente %>% filter(sesgo == 'sobre') %>% pull(n))
+```
+
+Por ultimo para las subestimaciones
+
+```{r}
+PlotFreqNulaSub <- ggplot(
+    freq_nula,
+    aes(x = sobre)
+  ) +
+  geom_density(fill = 'lightblue') +
+  geom_vline(
+    aes(xintercept = true_freq_consistente %>% filter(sesgo == 'sub') %>% pull(n)), 
+             linetype = 'dashed') +
+  theme_classic() +
+  xlab('Frecuencia') + ylab('Densidad')
+PlotFreqNulaSub
+```
+
+Los unicos dos que son claramente incompatibles con la distribucion nula son la subestimacion y la sobreestimacion. 
+
+```{r}
+true_freq_consistente %>% filter(sesgo == 'sub') %>% pull(n)
+quantile(freq_nula$sub, c(0.025,0.975))
+mean(freq_nula$sub <= true_freq_consistente %>% filter(sesgo == 'sub') %>% pull(n))
+```
+
+Metemos todos los graficos en uno solo
+
+```{r}
+ggarrange(
+  PlotFreqNulaOk, 
+  PlotFreqNulaSobre,
+  PlotFreqNulaSub,
+  ncol = 1,
+  labels = LETTERS[1:3]
+)
+ggsave('null_fre_compare.png', height = 6)
+```
+
+
+# Metodo 2
+
+Armamos una funcion para correr el modelo nulo. Solo hay que pasarle cuantos sujetos hay en total y cual es la tasa de acierto en la estimacion.
+
+```{r}
+modelo_nulo_fn <- function(cant_sujetos, tasa_acierto){
+  aciertos_nulos <- rbinom(cant_sujetos, 1, tasa_acierto)
+  ifelse(
+    aciertos_nulos == 1,
+    'ok',
+    sample(c('sub','sobre'), cant_sujetos-sum(aciertos_nulos), replace = T)
+  ) %>% as_tibble() %>% count(value) %>% pull(n)
+}
+```
+
+Corremos el modelo para todos los sujetos.
+
+```{r}
+comparacion_nula_todos <- replicate(
+  10000,
+  modelo_nulo_fn(sum(true_freq$n), true_freq$n[1]/sum(true_freq$n))
+)
+rownames(comparacion_nula_todos) <- c('ok', 'sobre', 'sub')
+comparacion_nula_todos <- comparacion_nula_todos %>% t() %>% as_tibble()
+```
+
+Graficamos la distribucion del modelo nulo
+
+```{r}
+plot_comparacion_todos <- ggplot(
+  comparacion_nula_todos %>% pivot_longer(cols = everything())
+) +
+  geom_violin(aes(x = name, y = value, color = name)) +
+  geom_point(data = true_freq,
+               aes(x = sesgo, y = n, color = sesgo), shape = 4, size = 6) +
+  theme_classic() + theme(legend.position = 'none') +
+  ylab('Frecuencia') +
+  scale_x_discrete(
+    'Tipo de respuesta',
+    labels=c("ok" = "Correcta", "sobre" = "Sobreestimacion",
+                              "sub" = "Subestimacion"),
+    limits = c('sub', 'ok', 'sobre')
+  )
+plot_comparacion_todos
+```
+
+Corremos el modelo para los sujetos consistentes.
+
+```{r}
+comparacion_nula_consistente <- replicate(
+  10000,
+  modelo_nulo_fn(sum(true_freq_consistente$n), true_freq_consistente$n[1]/sum(true_freq_consistente$n))
+)
+rownames(comparacion_nula_consistente) <- c('ok', 'sobre', 'sub')
+comparacion_nula_consistente <- comparacion_nula_consistente %>% t() %>% as_tibble()
+```
+
+Graficamos la distribucion del modelo nulo
+
+```{r}
+plot_comparacion_consistente <- ggplot(
+  comparacion_nula_consistente %>% pivot_longer(cols = everything())
+) +
+  geom_violin(aes(x = name, y = value, color = name)) +
+  geom_point(data = true_freq_consistente,
+               aes(x = sesgo, y = n, color = sesgo), shape = 4, size = 6) +
+  theme_classic() + theme(legend.position = 'none') +
+  ylab('Frecuencia') +
+  scale_x_discrete(
+    'Tipo de respuesta',
+    labels=c("ok" = "Correcta", "sobre" = "Sobreestimacion",
+                              "sub" = "Subestimacion"),
+    limits = c('sub', 'ok', 'sobre')
+  )
+plot_comparacion_consistente
+```
+
+
+
+```{r}
+ggarrange(plot_comparacion_todos, plot_comparacion_consistente, labels = LETTERS[1:2], ncol = 1)
+ggsave('null_freq_relative.png', height = 7)
+```
+
+
+# Metodo 3
+
+Graficamos primero la distribucion de la variable de interes 
+
+```{r}
+ggplot(
+  data = h3_dataset,
+  aes(x = autopercepcion)
+) +
+  geom_histogram(color = 'black', fill = 'lightblue', binwidth = 3600) + 
+  geom_vline(aes(xintercept = mean(autopercepcion)), color = 'red', linetype = 'dashed') +
+  geom_vline(aes(xintercept = median(autopercepcion)), color = 'green', linetype = 'dashed') +
+  ylab("Frecuencia") + xlab("Autopercepcion") + theme_classic()
+```
+Chequeamos la normalidad de la distribucion. 
+
+```{r}
+ggplot(h3_dataset, aes(sample = autopercepcion)) +
+  stat_qq() + stat_qq_line() +
+  xlab("Percentiles Teoricos") + ylab("Percentiles Muestrales") + theme_classic()
+```
+
+Unimos a los dos graficos en uno solo
+
+```{r}
+ggarrange(
+  ggplot(
+  data = h3_dataset,
+  aes(x = autopercepcion)
+) +
+  geom_histogram(color = 'black', fill = 'lightblue', binwidth = 3600) + 
+  geom_vline(aes(xintercept = mean(autopercepcion)), color = 'red', linetype = 'dashed') +
+  geom_vline(aes(xintercept = median(autopercepcion)), color = 'green', linetype = 'dashed') +
+  ylab("Frecuencia") + xlab("Autopercepcion") + theme_classic(),
+  ggplot(h3_dataset, aes(sample = autopercepcion)) +
+  stat_qq() + stat_qq_line() +
+  xlab("Percentiles Teoricos") + ylab("Percentiles Muestrales") + theme_classic(),
+  labels = LETTERS[1:2]
+)
+ggsave('autopercepcion_dist_all.png')
+```
+
+
+Hay varios outliers por lo que primero los detectamos para eliminarlos. 
+
+```{r, warning=FALSE}
+autopercepcion_outliers <- performance::check_outliers(h3_dataset$autopercepcion, method = c('zscore_robust','iqr'))
+h3_dataset_SinOutliers <- h3_dataset[autopercepcion_outliers == F,]
+```
+
+Repetimos los mismos graficos pero esta vez con el nuevo dataframe. 
+
+```{r}
+ggarrange(
+ggplot(
+  data = h3_dataset_SinOutliers,
+  aes(x = autopercepcion)
+) +
+  geom_histogram(color = 'black', fill = 'lightblue', binwidth = 3600) + 
+  geom_vline(aes(xintercept = mean(autopercepcion)), color = 'red', linetype = 'dashed') +
+  geom_vline(aes(xintercept = median(autopercepcion)), color = 'green', linetype = 'dashed') +
+  ylab("Frecuencia") + xlab("Autopercepcion") + theme_classic(),
+ggplot(h3_dataset_SinOutliers, aes(sample = autopercepcion)) +
+  stat_qq() + stat_qq_line() +
+  xlab("Percentiles Teoricos") + ylab("Percentiles Muestrales") + theme_classic(),
+labels = LETTERS[1:2]
+)
+ggsave('autopercepcion_dist_SinOutliers.png')
+```
+
+
+```{r}
+t.test(h3_dataset_SinOutliers$autopercepcion)
+effectsize::cohens_d(h3_dataset_SinOutliers$autopercepcion, mu = 0)
+t.test(h3_dataset_SinOutliers %>% filter(error_selfperception == F) %>% pull(autopercepcion))
+effectsize::cohens_d(h3_dataset_SinOutliers %>% filter(error_selfperception == F) %>% pull(autopercepcion), mu = 0)
+t.test(h3_dataset_SinOutliers %>% filter(error_selfperception == F & error_otherperception == F) %>% pull(autopercepcion))
+effectsize::cohens_d(h3_dataset_SinOutliers %>% filter(error_selfperception == F & error_otherperception == F) %>% pull(autopercepcion), mu = 0)
+```
+
+# Metodo 4
+
+Calculamos la frecuencia de cada categoria con el modelo nulo y lo repetimos con todos los sujetos, solo con los autoconsistentes y solo con los absolutamente consistentes.
+
+```{r}
+distribucion_frecuencia_nula <- function(dataset){
+  random_noise <- rnorm(
+    nrow(dataset),
+    0,
+    sd(dataset[['autopercepcion']])
+  )
+  random_estimation <- dataset[['uso_screnshot']] + random_noise
+  random_error <- dataset[['uso_screnshot']] - random_estimation
+  return(
+    mean(random_error > 0)
+  )
+}
+
+res_freq_nula_all <- replicate(
+  10000,
+  distribucion_frecuencia_nula(h3_dataset_SinOutliers)
+)
+res_freq_nula_self <- replicate(
+  10000,
+  distribucion_frecuencia_nula(h3_dataset_SinOutliers %>% filter(error_selfperception == F))
+)
+res_freq_nula_consistente <- replicate(
+  10000,
+  distribucion_frecuencia_nula(h3_dataset_SinOutliers %>% filter(error_selfperception == F & error_otherperception == F))
+)
+
+```
+
+Graficamos ahora los distintos casos
+
+```{r}
+ggarrange(
+  ggplot() +
+  geom_histogram(aes(x = res_freq_nula_all), color = 'black', fill = 'lightblue') + 
+  geom_vline(aes(xintercept = mean(h3_dataset_SinOutliers$autopercepcion < 0)), color = 'red', linetype = 'dashed') +
+  theme_classic() + ylab("Frecuencia") + xlab("Frecuencia de subestimacion"),
+ggplot() +
+  geom_histogram(aes(x = res_freq_nula_self), color = 'black', fill = 'lightblue') + 
+  geom_vline(
+    aes(
+      xintercept = mean(h3_dataset_SinOutliers %>% filter(error_selfperception == F) %>% pull(autopercepcion) < 0)
+        ), 
+             color = 'red', linetype = 'dashed') +
+  theme_classic() + ylab("Frecuencia") + xlab("Frecuencia de subestimacion"),
+ggplot() +
+  geom_histogram(aes(x = res_freq_nula_self), color = 'black', fill = 'lightblue') + 
+  geom_vline(
+    aes(
+      xintercept = mean(h3_dataset_SinOutliers %>% filter(error_selfperception == F & error_otherperception == F) %>% pull(autopercepcion) < 0)
+        ), 
+             color = 'red', linetype = 'dashed') +
+  theme_classic() + ylab("Frecuencia") + xlab("Frecuencia de subestimacion"),
+labels = LETTERS[1:3], ncol = 1
+)
+ggsave('null_dist_freq.png', height = 5)
+```
+
+
