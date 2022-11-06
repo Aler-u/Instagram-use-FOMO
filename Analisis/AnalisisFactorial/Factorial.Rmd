@@ -139,6 +139,7 @@ ggsave("scatter_uso.png")
 ```
 
 
+
 # Correlaciones
 
 ```{r}
@@ -149,7 +150,12 @@ library(corrplot)
 
 ```{r}
 corrplot(cor(spam, method = 'spearman'), method = 'ellipse', type = 'upper', addCoef.col = 'black')
-spearman_cor <- recordPlot()
+```
+
+
+```{r}
+corrplot(cor(spam_filtrado, method = 'spearman'), method = 'ellipse', type = 'upper', addCoef.col = 'black')
+title(main = 'Filtrados', line = 2)
 ```
 
 ## Kendall
@@ -167,6 +173,7 @@ cor(spam_filtrado, method = 'kendall') %>% corrplot(method = 'ellipse', type = '
 ## Policlorica
 
 ```{r}
+library(psych)
 polychoric(x = spam)$rho %>%
   corrplot(method = 'ellipse', type = 'upper', addCoef.col = 'black')
 ```
@@ -234,19 +241,19 @@ gamma_matrix_filtrado %>%
 ```
 
 
-
 # Correlaciones con intervalos
 
 Para comparar los niveles de correlacion de cada una de las variables con los distintos metodos vamos a calcular el nivel de la correlacion y a su vez vamos a calcular los intervalos de confianza del 95% sobre el valor del estadistico correspondiente usando un Bootstrap no parametrico de 5000 muestras.
 
-Para eso primero creamos una funcion que calcula los tres tipos de correlacion a partir de dos vectores numericos.
+Para eso primero creamos una funcion que calcula los cuatro tipos de correlacion a partir de dos vectores numericos.
 
 ```{r}
 all_corr <- function(vector_x, vector_y){
-  kendall_cor <- cor(vector_x, vector_y, method = 'kendall')
-  spearman_cor <- cor(vector_x, vector_y, method = 'spearman')
-  gamma_cor <- unname(rcorr.cens(vector_x, vector_y, outx = TRUE)['Dxy']) 
-  c(kendall_cor, spearman_cor, gamma_cor)
+  kendall_cor <- cor(vector_x, vector_y, method = 'kendall') #Correlacion de Kendall
+  spearman_cor <- cor(vector_x, vector_y, method = 'spearman') #Correlacion de Spearman
+  gamma_cor <- unname(Hmisc::rcorr.cens(vector_x, vector_y, outx = TRUE)['Dxy']) #Correlacion Gamma
+  poly_cor <- polychoric(data.frame(a = vector_x, b = vector_y))$rho[2,1] #Correlacion policorica
+  c(kendall_cor, spearman_cor, gamma_cor, poly_cor)
 }
 ```
 
@@ -264,9 +271,10 @@ Sobre esa base vamos a aplicarle a cada fila nuestra funcion y convertir los res
 all_corr_df <- all_comb %>%
   pmap(
     ~ all_corr(spam[[.x]], spam[[.y]])
-  ) %>% unlist() %>% matrix(nrow = 49, ncol = 3, byrow = TRUE) %>%
+  ) %>% unlist() %>% matrix(nrow = 49, ncol = 4, byrow = TRUE) %>%
   as.data.frame()
-colnames(all_corr_df) <- c('Kendall', 'Spearman', 'Gamma')
+colnames(all_corr_df) <- c('Kendall', 'Spearman', 'Gamma', 'Policorica')
+all_corr_df <- all_corr_df %>% mutate(Policorica = round(Policorica, 4))
 ```
 
 Combinamos ambos dataframes en uno solo uniendo las columnas y eliminamos los valores de 1 donde no hay variabilidad
@@ -276,7 +284,7 @@ all_comb_corr_df <- cbind(
   all_comb, 
   all_corr_df
 ) %>%
-  filter(Kendall < 1 & Spearman < 1 & Gamma < 1)
+  filter(Kendall < 1 & Spearman < 1 & Gamma < 1 & Policorica < 1)
 ```
 
 Calculo los indices de las filas que estan repetidas solo que tienen otro orden. 
@@ -303,11 +311,15 @@ Para comparar entre los distintos metodos de correlacion vamos a modificar el da
 ```{r}
 clean_comb_corr %>%
   unite('Var_comb', Var1:Var2, sep = '-') %>%
-  pivot_longer(Kendall:Gamma, names_to = 'tipo_cor', values_to = 'corr_val') %>%
+  pivot_longer(Kendall:Policorica, names_to = 'tipo_cor', values_to = 'corr_val') %>%
   ggplot(
-  aes(y = Var_comb, x = corr_val, color = tipo_cor)
+  aes(y = fct_reorder(Var_comb, corr_val), x = corr_val, color = tipo_cor)
 ) +
-  geom_point()
+  geom_point() + geom_vline(xintercept = 0, linetype = 'dashed') +
+  theme_linedraw() +
+  theme(legend.position = 'bottom') + xlab('Valor de la correlación') + ylab("Pares de variables") +
+  scale_color_discrete('Tipo de correlacion')
+ggsave('all_cors.png')
 ```
 
 Con el dataframe ya filtrado vamos a calcular los intervalos para la correlacion gamma utilizando bootstrap. Para esto vamos a usar el paquete `boot` y vamos a generar una nueva funcion llamada `gamma_cor`.
