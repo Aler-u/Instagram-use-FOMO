@@ -690,6 +690,7 @@ Despues chequeamos la normalidad de los residuales.
 
 ```{r}
 performance::check_normality(modelo_lineal_autopercepcion) %>% plot() + labs(title = '', subtitle = '', y = 'Densidad', x = 'Residuales')
+ggsave("lm1_resid.png")
 ```
 
 Por ultimo evaluamos la presencia de outliers y valores influyentes. 
@@ -726,8 +727,10 @@ check_model(nuevo_modelo_lineal_autopercepcion)
 ```
 
 ```{r}
-check_heteroscedasticity(nuevo_modelo_lineal_autopercepcion)
-check_normality(nuevo_modelo_lineal_autopercepcion)
+check_heteroscedasticity(nuevo_modelo_lineal_autopercepcion) %>% plot() + labs(title = '', subtitle = '', y = 'Raiz cuadrada de los Residuales Estandarizados', x = 'Valores ajustados') 
+ggsave("lm2_var.png")
+check_normality(nuevo_modelo_lineal_autopercepcion) %>% plot() + labs(title = '', subtitle = '', y = 'Densidad', x = 'Residuales')
+ggsave("lm2_resid.png")
 ```
 
 ```{r}
