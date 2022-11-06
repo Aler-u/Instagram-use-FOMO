@@ -25,7 +25,6 @@ spam_filtrado <- final_dataset %>%
   drop_na()
 ```
 
-
 Para ver mejor la distribucion de cada variable vamos a utilizar un grafico de ridge lines. 
 
 ```{r}
@@ -148,15 +147,9 @@ library(corrplot)
 
 ## Spearman
 
-
 ```{r}
 corrplot(cor(spam, method = 'spearman'), method = 'ellipse', type = 'upper', addCoef.col = 'black')
-```
-
-
-```{r}
-corrplot(cor(spam_filtrado, method = 'spearman'), method = 'ellipse', type = 'upper', addCoef.col = 'black')
-title(main = 'Filtrados', line = 2)
+spearman_cor <- recordPlot()
 ```
 
 ## Kendall
@@ -424,18 +417,56 @@ cor_df_combinado %>%
 ```{r}
 library(lavaan)
 ```
-
-Primero corremos el modelo usando la totalidad de los datos
+Hacemos un modelo nulo
 
 ```{r}
-cfa_ActivoPasivo <- "activo =~ A1 + A2 + A3 + A4
-pasivo =~ P1 + P2 + P3"
-cfa_Generico <- 'uso =~ A1 + A2 + A3 + A4 + P1 + P2 + P3'
-cfa_model <- cfa(cfa_ActivoPasivo, data = spam, mimic =c("MPlus"), std.lv = TRUE, ordered = TRUE)
-fitMeasures(cfa_model, c("chisq.scaled", "df", "pvalue.scaled"))
-fitMeasures(cfa_model, c("rmsea.scaled", "rmsea.ci.lower.scaled", "rmsea.ci.upper.scaled", "rmsea.pvalue.scaled"))
-fitMeasures(cfa_model, c("cfi.scaled", "srmr"))
+cfa_nulo <- '
+uso =~ A1 + A2 + A3 + A4 + P1 + P2 + P3
+A1 ~~ A3
+'
+cfa_nulo <- cfa(cfa_nulo, data = spam, std.lv = TRUE, ordered = TRUE)
+summary(cfa_nulo, fit.measures = T)
+fitMeasures(cfa_nulo)
 ```
+
+
+
+Primero corremos el modelo usando la estructura teorica postulada.
+
+```{r}
+cfa_ActivoPasivo <- 'activo =~ A1 + A2 + A3 + A4
+pasivo =~ P1 + P2 + P3
+'
+cfa_model <- cfa(cfa_ActivoPasivo, data = spam, std.lv = TRUE, ordered = TRUE)
+summary(cfa_model, fit.measures = T)
+```
+
+
+
+```{r}
+summary(cfa_model)
+fitMeasures(cfa_model)
+lavInspect(cfa_model, what = "resid")
+resid(cfa_model, type = "standardized")
+modificationindices(cfa_model) %>% arrange(desc(mi))
+```
+
+
+```{r}
+```
+
+```{r}
+cfa_ActivoPasivo_modificado <- 'activo =~ A1 + A2 + A3 + A4
+pasivo =~ P1 + P2 + P3
+A1 ~~ A3
+'
+cfa_model_modificado <- cfa(cfa_ActivoPasivo_modificado, data = spam, std.lv = TRUE, ordered = TRUE)
+summary(cfa_model_modificado, fit.measures = T)
+fitMeasures(cfa_model_modificado)
+lavResiduals(cfa_model_modificado)
+```
+
+
 
 
 ```{r}
@@ -462,12 +493,28 @@ parameterEstimates(cfa_model, standardized=TRUE, rsquare = TRUE) %>%
 
 # PCA
 
+```{r}
+princomp(covmat = cor(spam, method = 'spearman')) %>% summary(loadings = T)
+princomp(covmat = cor(spam, method = 'spearman')) %>% plot()
+princomp(covmat = cov(spam, method = 'spearman')) %>% summary(loadings = T)
+princomp(covmat = cov(spam, method = 'kendall')) %>% summary(loadings = T)
+princomp(covmat = cor(spam, method = 'kendall')) %>% summary(loadings = T)
+
+princomp(covmat = cor(spam, method = 'spearman'))$sdev^2
+princomp(covmat = cor(spam, method = 'kendall'))$sdev^2
+princomp(covmat = gamma_matrix) %>% summary(loadings = T)
+```
+
+
+
+
 ## Policorica
 
 Vamos a utilizar la funcion `principal` del paquete `psych`. Definimos la cantidad de factores (componentes) igual a la cantidad de variables. La rotacion de la matriz la definimos como nula para evitar tener una matriz de componentes correlacionados. Como metodo de correlacion dado que tenemos variables ordinales vamos a utilizar la correlacion polyclorica. 
 
 ```{r}
-poly_pca <- principal(spam, 7, rotate = 'none', cor = 'poly')
+poly_pca <- psych::principal(spam, 7, rotate = 'none', cor = 'poly')
+poly_pca$loadings
 ```
 
 Hacemos un skree plot para ver la proporcion de varianza explicada por cada componente. 
@@ -534,5 +581,85 @@ plot(captca, "screeplot")
 
 ```{r}
 plot(captca$objectscores, xlab = "dim1", ylab = "dim2", col = "RED", cex = .5)
+```
+
+
+
+
+
+
+```{r}
+mgcv::gam(
+  fomo ~ s(pasivo, bs = 'cr'), 
+  data = data.frame(fomo = final_dataset$fomo_puntaje, pasivo = lavPredict(cfa_model_modificado)[,2])
+    ) %>% summary()
+
+lm(
+  fomo ~ pasivo + activo,
+  data = data.frame(fomo = final_dataset$fomo_puntaje, pasivo = lavPredict(cfa_model_modificado)[,2])
+    ) %>% summary()
+ 
+```
+
+
+
+
+```{r}
+
+lm(
+  fomo_puntaje ~ ., data = cbind(spam, final_dataset['fomo_puntaje'])
+) %>% performance::check_model()
+
+cv <- glmnet::cv.glmnet(
+  x = model.matrix(fomo_puntaje~., cbind(spam, final_dataset['fomo_puntaje'])),
+  y = final_dataset$fomo_puntaje,
+  alpha = 1
+)
+
+glmnet::glmnet(
+  x = model.matrix(fomo_puntaje~., cbind(spam, final_dataset['fomo_puntaje'])),
+  y = final_dataset$fomo_puntaje,
+  alpha = 1,
+  lambda = cv$lambda.min
+) %>% coef()
+
+plot(cv$glmnet.fit, 'lambda')
+```
+
+
+```{r}
+lasso <- caret::train(
+  fomo_puntaje ~., data = cbind(spam, final_dataset['fomo_puntaje']), 
+  method = "glmnet",
+  trControl = caret::trainControl("LOOCV"),
+  tuneGrid = expand.grid(alpha = 1, lambda = 10^seq(-3, 3, length = 100))
+  )
+
+
+lasso %>% predict(cbind(spam, final_dataset['fomo_puntaje']))
+caret::RMSE(
+  lasso %>% predict(cbind(spam, final_dataset['fomo_puntaje'])),
+  final_dataset$fomo_puntaje
+)
+```
+
+```{r}
+modelo_pls <- caret::train(
+  fomo_puntaje ~ .,
+  data = cbind(spam, final_dataset['fomo_puntaje']),
+  trControl = caret::trainControl("LOOCV"),
+  preProcess = c("center", "scale"),
+  tuneGrid = expand.grid(
+    ncomp = seq(1, 5, by = 1)
+                         ),
+  method = 'pls'
+)
+
+modelo_pls
+```
+
+```{r}
+plot(modelo_pls)
+plot(varImp(modelo_pls))
 ```
 

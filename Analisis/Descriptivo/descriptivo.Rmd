@@ -1,0 +1,138 @@
+---
+title: "Analisis Descriptivo"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ggridges)
+load("../Pre-procesamiento/dataset_final.rda")
+```
+
+# Edad
+
+Graficamos la distribucion de la edad para todos los sujetos.
+
+```{r}
+edad_total <- ggplot(
+  data = final_dataset,
+  aes(x = Edad)
+) + geom_histogram(binwidth = 3, color = 'black', fill = 'lightblue') + theme_classic() +
+  ylab("Frecuencia") + xlab("Edad")
+edad_total
+```
+
+Posteriormente graficamos la distribucion de edad separando segun la consistencia de las respuestas. Como esto lo vamos a hacer varias veces es mejor crear un nuevo dataframe con la estructura que nos permita graficarlo.
+
+```{r}
+consistencia_fun <- function(var_value1, var_value2){
+  if(var_value1 == F & var_value2 == F){
+    return('Consistente')
+  }else if(var_value1 == F) {
+    return('Autoconsistente')
+  }else if(var_value2 == F){
+    return('Heteroconsistente')
+  }else{
+    return('Inconsistente')
+  }
+}
+nuevo_final_dataset <- final_dataset %>% rowwise() %>%
+    mutate(consistencia = consistencia_fun(error_selfperception, error_otherperception)) %>% 
+  ungroup()
+```
+
+
+```{r}
+edad_autoconsistente <- ggplot(
+  data = nuevo_final_dataset,
+  aes(x = Edad, y = consistencia, fill = consistencia)
+) + geom_density_ridges() + theme_classic() + theme(legend.position = 'none') +
+  scale_y_discrete("Consistencia en las respuestas",
+                   limits = rev(c("Consistente", "Autoconsistente", "Heteroconsistente", "Inconsistente")))
+edad_autoconsistente
+```
+
+Unimos el grafico de la edad para todos los sujetos con el de la edad separada por consistencia de la respuesta.
+
+```{r}
+ggpubr::ggarrange(
+  edad_total, edad_autoconsistente, labels = LETTERS[1:2]
+)
+ggsave("dist_edad.png")
+```
+
+
+# FOMO
+
+```{r}
+fomo_total <- ggplot(
+  final_dataset,
+  aes(x = fomo_puntaje)) + 
+  geom_histogram(binwidth = 4, color = 'black', fill = 'lightblue') + theme_classic() +
+  ylab("Frecuencia") + xlab("Puntaje en la escala de FOMO")
+fomo_total
+fomo_autoconsistente <- ggplot(
+  data = nuevo_final_dataset,
+  aes(x = fomo_puntaje, y = consistencia, fill = consistencia)
+) + geom_density_ridges() + theme_classic() + theme(legend.position = 'none') + xlab("Puntaje en la escala de FOMO") +
+  scale_y_discrete("Consistencia en las respuestas",
+                   limits = rev(c("Consistente", "Autoconsistente", "Heteroconsistente", "Inconsistente")))
+fomo_autoconsistente
+```
+Se unen ambos graficos en uno
+
+```{r}
+ggpubr::ggarrange(
+  fomo_total, fomo_autoconsistente, labels = LETTERS[1:2]
+)
+ggsave("dist_fomo.png")
+```
+
+# Autopercepcion y heteropercepcion
+
+```{r}
+estimacion_todos <- ggplot(
+  final_dataset %>% pivot_longer(cols = c(selfperception_num, otherperception_num)) %>% mutate(value = value/60),
+  aes(x = value)
+) +
+  geom_histogram(bins = 20, color = 'black', fill = 'lightblue') + 
+  facet_wrap(~name, 
+             labeller = labeller(
+               name = c('otherperception_num' = 'Heteropercepción', 'selfperception_num' = 'Autopercepción')
+               )
+             ) +
+  scale_x_continuous("Estimación numerica (minutos)", trans = 'log10', labels = scales::comma_format(big.mark = "")) +
+  theme_classic() + ylab("Frecuencia")
+estimacion_todos
+```
+
+Repetimos el mismo grafico pero separamos por la consistencia de la respuesta
+
+```{r}
+estimacion_consistente <- ggplot(
+  nuevo_final_dataset %>% pivot_longer(cols = c(selfperception_num, otherperception_num)) %>% mutate(value = value/60),
+  aes(x = value, y = consistencia, fill = consistencia)
+) +
+  geom_density_ridges() + 
+  facet_wrap(~name, 
+             labeller = labeller(
+               name = c('otherperception_num' = 'Heteropercepción', 'selfperception_num' = 'Autopercepción')
+               )
+             ) +
+  theme_classic() + theme(legend.position = 'none') +
+  scale_y_discrete("Consistencia en las respuestas",
+                   limits = rev(c("Consistente", "Autoconsistente", "Heteroconsistente", "Inconsistente"))) +
+  scale_x_continuous("Estimación numerica (minutos)", trans = 'log10', labels = scales::comma_format(big.mark = "")) 
+```
+
+Unificamos ambos graficos en uno solo
+
+```{r}
+ggpubr::ggarrange(
+  estimacion_todos, estimacion_consistente,
+  labels = LETTERS[1:2], 
+  ncol = 1
+)
+ggsave("dist_estimacion.png", height = 7)
+```
+

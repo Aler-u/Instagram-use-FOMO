@@ -649,11 +649,15 @@ Graficamos la asociacion
 
 ```{r}
 ggplot(
-  data = h2_dataset,
+  data = h2_dataset %>% mutate(autopercepcion = autopercepcion/60),
   aes(x = autopercepcion, y = fomo_puntaje)
 ) + geom_point(aes(color = error_otherperception, shape = error_selfperception)) +
-  geom_smooth(method = 'loess', linetype = 'dashed') + geom_smooth(method = 'lm', color = 'red') +
-  theme(legend.position = 'bottom')
+  geom_smooth(method = 'loess', linetype = 'dashed', se = F, color = 'red') + geom_smooth(method = 'lm', se = F) +
+  theme_classic() + theme(legend.position = 'bottom') + xlab("Error en la Autopercepción (minutos)") + 
+  ylab("Puntaje en la escala de FOMO") +
+  scale_color_discrete('Autoconsistencia', labels = c("Consistente", "Inconsistente")) +
+  scale_shape_discrete('Heteroconsistencia', labels = c("Consistente", "Inconsistente"))
+ggsave("fomo_autoerror.png", width = 8)
 ```
 
 
@@ -668,13 +672,18 @@ Chequeamos el resumen general
 ```{r}
 summary(modelo_lineal_autopercepcion)
 ```
+
 Hacemos graficos diagnosticos. Primero chequeamos la homogeneidad de la varianza 
 
 ```{r}
 performance::check_heteroscedasticity(modelo_lineal_autopercepcion)
 ```
+
+
+
 ```{r}
-performance::check_heteroscedasticity(modelo_lineal_autopercepcion) %>% plot() + labs(title = '', subtitle = '', y = 'Raiz cuadrada de los Residuales Estandarizados', x = 'Valores ajustados')
+performance::check_heteroscedasticity(modelo_lineal_autopercepcion) %>% plot() + labs(title = '', subtitle = '', y = 'Raiz cuadrada de los Residuales Estandarizados', x = 'Valores ajustados') 
+ggsave("lm1_var.png")
 ```
 
 Despues chequeamos la normalidad de los residuales.
